@@ -65,6 +65,9 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   ([#860](https://github.com/devswha/herdr-web-ui/pull/860))
 
 ### Fixed
+- A Pi conversation whose session file has grown past 64 MiB reads as a conversation again, where
+  the chat fell back to the terminal's text (`branch_unreadable`): the reader no longer refuses a
+  long active branch as a whole, and pages it the way it pages a short one, within the same budgets.
 - Web UI SSH connections no longer open extra tunnels configured in the account’s SSH config.
   ([#606](https://github.com/devswha/herdr-web-ui/pull/606) by @sobir-git)
 - **Send now** on a working Codex pane sends the message at once. Codex kept it until its next
