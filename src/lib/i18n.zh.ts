@@ -65,6 +65,7 @@ export const ZH: Record<string, string> = {
   "Pin agent": "固定 Agent",
   "Unpin agent": "取消固定 Agent",
   "Forest": "森林绿",
+  "Message from {name}": "来自 {name} 的消息",
   "Density": "密度",
   "Comfortable": "宽松",
   "Compact": "紧凑",

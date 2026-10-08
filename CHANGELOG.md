@@ -65,6 +65,9 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   ([#860](https://github.com/devswha/herdr-web-ui/pull/860))
 
 ### Fixed
+- A message another Claude Code session sends into a pane (its `peer` messages) shows in the chat as
+  a folded **Message from {name}** that opens its own turn, instead of being skipped so the work it
+  started was appended to the answer before it.
 - Web UI SSH connections no longer open extra tunnels configured in the account’s SSH config.
   ([#606](https://github.com/devswha/herdr-web-ui/pull/606) by @sobir-git)
 - **Send now** on a working Codex pane sends the message at once. Codex kept it until its next

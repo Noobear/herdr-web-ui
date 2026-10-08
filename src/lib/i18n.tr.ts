@@ -61,6 +61,7 @@ export const TR: Record<string, string> = {
   "Pin agent": "Ajanı sabitle",
   "Unpin agent": "Ajanın sabitlemesini kaldır",
   "Forest": "Orman",
+  "Message from {name}": "{name} kaynağından mesaj",
   "Density": "Yoğunluk",
   "Comfortable": "Rahat",
   "Compact": "Kompakt",

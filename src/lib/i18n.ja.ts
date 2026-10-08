@@ -63,6 +63,7 @@ export const JA: Record<string, string> = {
   "Pin agent": "エージェントを固定",
   "Unpin agent": "エージェントの固定を解除",
   "Forest": "フォレスト",
+  "Message from {name}": "{name} からのメッセージ",
   "Density": "表示密度",
   "Comfortable": "ゆったり",
   "Compact": "コンパクト",

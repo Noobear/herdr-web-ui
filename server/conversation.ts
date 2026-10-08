@@ -59,7 +59,7 @@ import { parseConversationMetadata } from "./conversation-metadata.ts";
 import { forgetHermesTranscriptState, hermesConversationPage, hermesToolOutput, hermesTranscriptForPane } from "./hermes.ts";
 
 import { invokedSkill } from "./skill-activity.ts";
-import { agentTaskResult, isContextClear, MAX_TURNS, parseOmpTranscript, piImageBlock, piMessage, piResults, toolSummary } from "./transcript-records.ts";
+import { agentTaskResult, isContextClear, MAX_TURNS, parseOmpTranscript, piImageBlock, piMessage, piResults, toolSummary, claudePeerNotice } from "./transcript-records.ts";
 import { forgetSubagents, lineNotifications, subagentDetails, taskNotification, type SubagentDetail } from "./claude-subagents.ts";
 
 export { isOmoProcess } from "./omo.ts";
@@ -303,7 +303,11 @@ export function parseClaudeTranscript(text: string, maxTurns = MAX_TURNS, option
     } catch {
       continue; // a torn tail line while Claude is mid-append
     }
-    if (entry === null || typeof entry !== "object" || entry.isMeta) continue;
+    if (entry === null || typeof entry !== "object") continue;
+    // another session's message: its own turn, so the work it started is not appended to the answer before it
+    const peer = claudePeerNotice(entry);
+    if (peer !== null) { turns.push({ role: "user", ts: entry.timestamp ?? null, parts: [peer] }); continue; }
+    if (entry.isMeta) continue;
     if (isContextClear(entry, "claude-transcript")) { turns.length = 0; pending.clear(); lastPrompt = null; continue; }
     const content = entry.message?.content;
     // a compaction's summary marks where the conversation was folded, readable on request
@@ -668,6 +672,7 @@ function opensTurn(source: StreamSource, line: string): boolean {
     const message = piMessage(entry);
     return message?.role === "user" && (message.content as Record<string, unknown>[]).some((part) => part.type === "text" && typeof part.text === "string" && part.text.length > 0);
   }
+  if (claudePeerNotice(entry) !== null && entry.type === "user") return true;
   if (entry.type !== "user" || entry.isMeta || entry.isCompactSummary) return false;
   const content = entry.message?.content;
   if (typeof content === "string") return !isCommandEntry(content);
