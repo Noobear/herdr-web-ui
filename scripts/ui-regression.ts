@@ -41,6 +41,7 @@ import { checkCommandArrows } from "./terminal-command-arrows-regression.ts";
 import { checkFolderFilter } from "./folder-filter-regression.ts";
 import { checkPaletteKeys } from "./palette-keys-regression.ts";
 import { checkUpdateNotice } from "./update-notice-regression.ts";
+import { checkTelemetrySettings } from "./telemetry-regression.ts";
 import { UsageService } from "../server/usage.ts";
 import { openSettingsPage } from "./settings-page.ts";
 import { assertCspClean, watchCsp } from "./csp-violations.ts";
@@ -870,6 +871,7 @@ try {
   await checkBackgroundTabKeepsTerminalSize(browser, origin);
   await checkFocusedWindowReclaimsTerminalSize(browser, origin);
   await checkUpdateNotice(browser, origin);
+  await checkTelemetrySettings(browser);
 
   // The pending protocol has a real foreground agent and an owned byte recorder: merely
   // reporting an idle shell as working would not prove that server-side queueing happened.
