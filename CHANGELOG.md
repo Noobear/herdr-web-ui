@@ -77,6 +77,9 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   ([#860](https://github.com/devswha/herdr-web-ui/pull/860))
 
 ### Fixed
+- Korean typed on an iPad with a hardware keyboard (Magic Keyboard) reaches the terminal as whole
+  syllables again. iPadOS Safari sent each jamo as its own key, so 한 arrived as ㅎㅏㄴ; the
+  terminal now lets the iPad compose the syllable and sends it once, before the next key.
 - A message another Claude Code session sends into a pane (its `peer` messages) shows in the chat as
   a folded **Message from another session: {name}** that opens its own turn, instead of being skipped so the work it
   started was appended to the answer before it.
