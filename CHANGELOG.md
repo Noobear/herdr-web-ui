@@ -48,6 +48,7 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   choices, rather than only the names of changed appearance settings. Custom text and account
   identifiers stay out; custom choices use flags or counts. The expanded notice is shown again
   before sending, and existing opt-outs and install/update-only delivery stay unchanged.
+  ([#866](https://github.com/devswha/herdr-web-ui/pull/866))
 - Markdown file previews are parsed in a worker with a 2 s budget and a 60 000-element limit,
   keeping the existing HTML blocks, images and reader-page navigation. A preview that cannot
   be drawn offers its source. Partial text and preview, highlighting or line-number limits are
