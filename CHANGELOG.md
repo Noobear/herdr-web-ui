@@ -52,6 +52,11 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   ([#606](https://github.com/devswha/herdr-web-ui/pull/606) by @sobir-git)
 
 ### Changed
+- Install and update counts include app setting values such as theme, text size and notification
+  choices, rather than only the names of changed appearance settings. Custom text and account
+  identifiers stay out; custom choices use flags or counts. The expanded notice is shown again
+  before sending, and existing opt-outs and install/update-only delivery stay unchanged.
+  ([#866](https://github.com/devswha/herdr-web-ui/pull/866))
 - Markdown file previews are parsed in a worker with a 2 s budget and a 60 000-element limit,
   keeping the existing HTML blocks, images and reader-page navigation. A preview that cannot
   be drawn offers its source. Partial text and preview, highlighting or line-number limits are
@@ -65,6 +70,13 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   ([#860](https://github.com/devswha/herdr-web-ui/pull/860))
 
 ### Fixed
+- A message another Claude Code session sends into a pane (its `peer` messages) shows in the chat as
+  a folded **Message from another session: {name}** that opens its own turn, instead of being skipped so the work it
+  started was appended to the answer before it.
+- Attached files upload three at a time instead of one after another, and each file's `@path` goes
+  to the start of the message in the order the files were picked, once a `/command` being typed or
+  an IME composition is finished. It used to go where the caret
+  was, so a path that arrived while you typed landed in the middle of your words and moved the caret.
 - A Pi conversation whose session file has grown past 64 MiB reads as a conversation again, where
   the chat fell back to the terminal's text (`branch_unreadable`): the reader no longer refuses a
   long active branch as a whole, and pages it the way it pages a short one, within the same budgets.
@@ -178,6 +190,7 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   start or length (Claude, Codex, Grok), from 5% of the window on.
   ([#513](https://github.com/devswha/herdr-web-ui/pull/513) by @kilhyeonjun, [#834](https://github.com/devswha/herdr-web-ui/pull/834))
 - Turkish (Türkçe) UI translation: a full `i18n.tr.ts` dictionary, the language in the Settings menu with browser detection, and a Turkish README. ([#815](https://github.com/devswha/herdr-web-ui/pull/815) by @fitzgpt)
+- Configurable paging shortcuts scroll the current chat transcript or native terminal history with Mod+Shift+PageUp/PageDown and 0–100 lines of overlap (one by default). Settings → Chat can opt into plain PageUp/PageDown while composing, preserving the draft, selection and focus. When herdr explicitly reports no native history, a paging action sends plain page keys to the running application, which controls its own page length. ([#811](https://github.com/devswha/herdr-web-ui/pull/811) by @kratam)
 - Native conversation transcripts for Hermes Agent: turns, thinking blocks, and tool calls are read directly from its SQLite session store. ([#604](https://github.com/devswha/herdr-web-ui/pull/604) by @RikiSanjayaa)
   A remote PC reads them once its bridge is updated to this release's runtime.
 - **Deep links.** The address now says where you are, and opens there: the PC, the workspace (by id and a short slug of its name, so `?ws=w2K-herdr-web-ui&pane=w2K:p1&view=chat` reads like the place), the pane and its lens, an open file, a Settings page and group (`&settings=about&section=updates`), the New workspace dialog with its fields filled (`?new=workspace&cwd=…&name=…&agent=…`; a link never creates anything), and a collapsed sidebar (`&sidebar=hidden`). Opening another pane is a history entry, so Back returns to the last one. A link to a pane that has closed opens its workspace, a link to nothing open says so, and **Copy link** in the header's More menu copies the address on a phone.
