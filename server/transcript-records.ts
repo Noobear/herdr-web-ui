@@ -36,8 +36,22 @@ export function claudePeerNotice(value: unknown): Extract<ConversationPart, { ki
   const envelope = queued !== null ? queued.prompt : record(entry.message).content;
   const parsed = typeof envelope === "string" ? /<cross-session-message\b([^>]*)>\n?([\s\S]*?)\n?<\/cross-session-message>/.exec(envelope) : null;
   const body = typeof origin.body === "string" ? origin.body : parsed?.[2] ?? "";
-  const name = typeof origin.name === "string" && origin.name.trim() ? origin.name.trim() : /\bfrom-name="([^"]+)"/.exec(parsed?.[1] ?? "")?.[1] ?? "session";
+  // an unnamed sender leaves the source bare (`peer:`); the chat says "another session" for it
+  const name = typeof origin.name === "string" && origin.name.trim() ? origin.name.trim() : /\bfrom-name="([^"]+)"/.exec(parsed?.[1] ?? "")?.[1] ?? "";
   return body.trim() ? { kind: "notice", text: body, source: `peer:${name}` } : null;
+}
+
+/**
+ * One delivery of another session's message, as Claude identifies it: the sender and its message id.
+ * Claude can record the same delivery twice (queued mid-turn, then echoed as a meta entry); the second
+ * record is the same notice. Null when the record does not carry both.
+ */
+export function claudePeerId(value: unknown): string | null {
+  const entry = record(value);
+  const queued = entry.type === "attachment" ? record(entry.attachment) : null;
+  const origin = record(queued !== null ? queued.origin : entry.origin);
+  return origin.kind === "peer" && typeof origin.from === "string" && typeof origin.msg_id === "string" && origin.from && origin.msg_id
+    ? `${origin.from}|${origin.msg_id}` : null;
 }
 
 /** Pi-family providers use several spellings for the same tool call/result fields. */
