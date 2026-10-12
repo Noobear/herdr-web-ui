@@ -1669,12 +1669,17 @@ function piToolOutput(path: string, ref: string): string | null {
   let branch: ReturnType<typeof piBranchSegments>;
   try { size = statSync(path).size; branch = piBranchSegments(path, size); } catch { return null; }
   if (branch === null) return null;
+  // only a record that can be a clear or can hold the ref is parsed: an unrelated record (a picture
+  // the agent read, a long tool result) is skipped on a substring check, as the segment reader did
+  const needle = JSON.stringify(ref);
   let output: string | null = null;
   for (const line of piBranchRecords(path, size)) {
-    let entry: unknown;
-    try { entry = JSON.parse(line); } catch { continue; }
-    if (isContextClear(entry, "pi-transcript")) output = null;
-    else if (output === null) output = outputInText("pi-transcript", line, ref);
+    if (line.includes("context_clear")) {
+      let entry: unknown;
+      try { entry = JSON.parse(line); } catch { continue; }
+      if (isContextClear(entry, "pi-transcript")) { output = null; continue; }
+    }
+    if (output === null && line.includes(needle)) output = outputInText("pi-transcript", line, ref);
   }
   return output;
 }

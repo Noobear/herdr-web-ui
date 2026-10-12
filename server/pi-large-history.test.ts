@@ -2,11 +2,12 @@ import { afterAll, expect, test } from "bun:test";
 import { appendFileSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { piBranchSegments, piEntryIndex, piIndexCacheUsage, PI_INDEX_CACHE_BYTES, MAX_PI_ENTRY_BYTES, MAX_PI_INDEX_ENTRIES } from "./pi-tree.ts";
+import { forgetAllPiIndexes, piBranchSegments, piEntryIndex, piIndexCacheUsage, PI_INDEX_CACHE_BYTES, MAX_PI_ENTRY_BYTES, MAX_PI_INDEX_ENTRIES } from "./pi-tree.ts";
 import { transcriptPage, transcriptToolOutput, piTranscriptImage, piPageCacheUsage, forgetTranscriptState } from "./conversation.ts";
 import { withinRetentionBudget } from "./retention-budget.ts";
 const dir = mkdtempSync(join(tmpdir(), "pi-bounded-history-"));
-afterAll(() => rmSync(dir, { recursive: true, force: true }));
+// the readers keep module-wide caches keyed by path: leave none behind for the files removed here
+afterAll(() => { forgetTranscriptState(); forgetAllPiIndexes(); rmSync(dir, { recursive: true, force: true }); });
 const textOf = (page: ReturnType<typeof transcriptPage>) => page.turns.flatMap(t => t.parts).flatMap(p => p.kind === "text" ? [p.text] : []);
 const message = (id: string, parentId: string | null, role: string, text: string) => ({ id, parentId, type: "message", message: { role, content: [{ type: "text", text }] } });
 test("history beyond 64MiB remains paged and complete, stable on append, with bounded index retention", () => {
@@ -60,10 +61,27 @@ test("oversized individual records and excessive entry counts fail closed withou
   writeFileSync(path, JSON.stringify({ id: "bad", type: "x".repeat(65) }) + "\n"); expect(piEntryIndex(path)).toBeNull();
   const summary = "s".repeat(9 * 1024 * 1024);
   writeFileSync(path, JSON.stringify({ id: "one", type: "branch_summary", parentId: null, summary }) + "\n");
-  expect(piEntryIndex(path)).not.toBeNull(); // valid, but too large to retain in the index cache
+  expect(piEntryIndex(path)).not.toBeNull(); // valid: large, and still within the metadata budget
   appendFileSync(path, JSON.stringify({ id: "two", type: "branch_summary", parentId: "one", summary }) + "\n");
   expect(piEntryIndex(path)).toBeNull(); // retained metadata budget, independent of history byte size
 }, 15000);
+test("a valid index above 8 MiB of metadata is cached: an unchanged history is not indexed again, an append extends it", () => {
+  forgetAllPiIndexes();
+  const path = join(dir, "many-small.jsonl");
+  writeFileSync(path, Array.from({ length: 40_000 }, (_, i) => JSON.stringify(message("m" + i, i ? "m" + (i - 1) : null, "user", "q" + i))).join("\n") + "\n");
+  const first = piEntryIndex(path)!;
+  expect(first.retainedBytes).toBeGreaterThan(8 * 1024 * 1024);
+  expect(piEntryIndex(path)).toBe(first); // the same index object: nothing was rebuilt
+  appendFileSync(path, JSON.stringify(message("next", "m39999", "user", "appended")) + "\n");
+  const extended = piEntryIndex(path)!;
+  expect(extended).toBe(first); // extended in place from the scanned offset
+  expect(extended.entries).toHaveLength(40_001);
+  expect(piIndexCacheUsage().estimatedBytes).toBeLessThanOrEqual(PI_INDEX_CACHE_BYTES);
+  // other files read after it push it out once the budget is spent, never the one just read
+  for (let i = 0; i < 4; i++) { const other = join(dir, `after-${i}.jsonl`); writeFileSync(other, JSON.stringify(message("u", null, "user", "x")) + "\n"); piEntryIndex(other); }
+  expect(piIndexCacheUsage().files).toBe(4);
+  expect(piEntryIndex(path)).not.toBe(first); // evicted as least recently read, then rebuilt
+}, 30000);
 test("parsed page caches admit at most four small pages each and still serve oversized pages uncached", () => {
   forgetTranscriptState();
   for (let i = 0; i < 7; i++) {

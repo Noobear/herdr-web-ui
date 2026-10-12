@@ -12,8 +12,13 @@ import { closeSync, openSync, readSync, statSync } from "node:fs";
 /** Bound work/retention, not cumulative history bytes: pages already bound transcript reads. */
 export const MAX_PI_INDEX_ENTRIES = 100_000;
 export const MAX_PI_ENTRY_BYTES = 16 * 1024 * 1024;
-export const PI_INDEX_CACHE_BYTES = 8 * 1024 * 1024;
 const MAX_PI_INDEX_METADATA_BYTES = 32 * 1024 * 1024;
+/**
+ * The index cache keeps any index the builder accepts, so an unchanged history is never indexed
+ * twice whatever its size, and holds at most this much estimated metadata across at most
+ * PI_INDEX_CACHE_FILES files: the least recently read goes first, never the one just read.
+ */
+export const PI_INDEX_CACHE_BYTES = MAX_PI_INDEX_METADATA_BYTES;
 const PI_INDEX_CACHE_FILES = 4;
 
 /** One range of the transcript file, in the order it should be read. */
@@ -147,9 +152,15 @@ export function piEntryIndex(path: string): PiIndex | null {
     const reusable = cached && cached.file === file && cached.scanned <= size && readBefore(path, cached.scanned, 64) === cached.tail;
     const fresh = reusable ? cached : buildIndex(path, size, file);
     if (reusable) extendIndex(fresh, path, size);
-    if (fresh.retainedBytes <= PI_INDEX_CACHE_BYTES) piIndexes.set(path, fresh);
-    while (piIndexes.size > PI_INDEX_CACHE_FILES || [...piIndexes.values()].reduce((sum, item) => sum + item.retainedBytes, 0) > PI_INDEX_CACHE_BYTES)
-      piIndexes.delete(piIndexes.keys().next().value!);
+    piIndexes.set(path, fresh); // last in the map's order: the most recently read
+    let total = 0;
+    for (const item of piIndexes.values()) total += item.retainedBytes;
+    for (const [other, item] of piIndexes) {
+      if (piIndexes.size <= PI_INDEX_CACHE_FILES && total <= PI_INDEX_CACHE_BYTES) break;
+      if (other === path) break; // the builder never accepts more than the budget, so this one fits alone
+      piIndexes.delete(other);
+      total -= item.retainedBytes;
+    }
     return fresh;
   } catch { return null; }
 }
@@ -203,7 +214,8 @@ export function piBranchSegments(path: string, size: number): TranscriptSegment[
 export function* piBranchRecords(path: string, size: number): Generator<string> {
   const branch = piBranchSegments(path, size), index = piEntryIndex(path);
   if (!branch || !index || (index.entries.at(-1)?.end ?? 0) > size) return;
-  const fd = openSync(path, "r");
+  let fd: number;
+  try { fd = openSync(path, "r"); } catch { return; } // moved or removed since it was indexed: nothing to read
   try {
     for (const segment of branch) {
       let low = 0, high = index.entries.length;
