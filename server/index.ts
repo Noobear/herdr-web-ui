@@ -1498,9 +1498,11 @@ export function createServer(
     const held: string[] = [];
     (attachment.joining ??= new Map()).set(client, held);
     const state = attachment.replay.state();
+    // mirrorFrame hides the cursor while it draws: the stream's own cursor mode is restored after it
+    const cursor = state.match(/\x1b\[\?25[hl]/)?.[0] ?? "";
     const tail = attachment.replay.text();
     void paneRead({ paneId, source: "visible", format: "ansi" }).then(
-      (read) => state + mirrorFrame(read.text, attachment.rows),
+      (read) => state + mirrorFrame(read.text, attachment.rows) + cursor,
       // no screen to read: the tail is still better than nothing
       () => tail,
     ).then((screen) => {

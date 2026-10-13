@@ -84,5 +84,7 @@ describe("a late joiner of a busy pane", () => {
     await late.attach();
     await until(() => late.state.text.includes("FOOTER_PROMPT") && late.state.text.includes("STATUS_FOOTER"), "the late tab's footer", 10_000);
     expect(late.state.text).toContain("STATUS_FOOTER");
+    // drawn from the screen read, not from a replay of the whole 256 KiB tail
+    expect(late.state.bytes).toBeLessThan(256 * 1024);
   }, 150_000);
 });
