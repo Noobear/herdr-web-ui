@@ -2238,15 +2238,21 @@ function omoModelListWaits(screen: string): boolean {
   if (list === null) return false;
   let rules = 0;
   let footer = 0;
-  for (const raw of lines.slice(list.filterAt + 1)) {
-    const line = cleanLine(raw);
+  const tail = lines.slice(list.filterAt + 1).map((raw) => cleanLine(raw));
+  for (const [index, raw] of lines.slice(list.filterAt + 1).entries()) {
+    const line = tail[index]!;
     if (!line) continue;
     if (SOLID_RULE_RE.test(line)) {
       if (rules > 0 || footer > 0) return false;
       rules = 1;
     } else if (rules === 0) {
-      // the catalogue's rows, a wrapped provider tail, or one of OmO's notes under them
-      if (!/^\s/.test(raw) && !/^[\u2192\u276f\u279c]/.test(line) && !PI_MODEL_TAIL_RE.test(line) && !OMO_MODEL_NOTE_RE.test(line)) return false;
+      // only the catalogue's rows (or a row a narrow pane wrapped before its provider), a wrapped
+      // provider tail, or OmO's own notes: any other output under the list means it was left
+      const label = (/^[\u2192\u276f\u279c]/.test(line) || /^ {2,}/.test(raw)) ? line.match(PI_ROW_RE)?.[2]?.trim() : undefined;
+      const row = label !== undefined && !/\s{2,}/.test(label)
+        && (PI_MODEL_PROVIDER_RE.test(label) || PI_MODEL_TAIL_RE.test(tail[index + 1] ?? ""));
+      const note = /^\u2026\s*\d+ more (?:below|above)$/.test(line) || /^Model Name:/.test(line) || /^No matching models$/.test(line) || OMO_MODEL_NOTE_RE.test(line);
+      if (!row && !note && !PI_MODEL_TAIL_RE.test(line)) return false;
     } else if (++footer > OMO_FOOTER_LINES || OMO_NOT_FOOTER_RE.test(line)) return false;
   }
   return rules === 1;

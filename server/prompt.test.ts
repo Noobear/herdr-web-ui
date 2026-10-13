@@ -4774,6 +4774,10 @@ favorite
     expect(parseInteractivePrompt("omo", wide.replace(/enter select +ctrl\+s select as default +ctrl\+f favorite\n/, ""))).toBeNull();
     const rule = wide.lastIndexOf("─");
     expect(parseInteractivePrompt("omo", `${wide.slice(0, wide.indexOf("Model Name"))}some other output\n${wide.slice(wide.indexOf("Model Name"))}`)).toBeNull();
+    // indented output that is neither a row nor one of OmO's notes means the list was left too
+    const noteAt = wide.lastIndexOf("\n", wide.indexOf("Model Name")) + 1;
+    expect(parseInteractivePrompt("omo", wide)).not.toBeNull();
+    expect(parseInteractivePrompt("omo", `${wide.slice(0, noteAt)}  npm warn deprecated left-pad\n${wide.slice(noteAt)}`)).toBeNull();
     expect(rule).toBeGreaterThan(0);
   });
 });
