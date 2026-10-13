@@ -25,8 +25,11 @@ export async function checkIpadIme(browser: Browser, origin: string, pane: strin
     }, { pane, platform });
     const sent: Array<{ pane_id: string; text: string }> = [];
     let ready = false;
+    // output for the page as if the pane wrote it: input here never reaches the pane to echo
+    let toPage = (_data: string): void => {};
     await page.routeWebSocket(/\/ws(?:\?|$)/, (socket) => {
       const server = socket.connectToServer();
+      toPage = (data) => socket.send(JSON.stringify({ type: "pty-data", pane_id: pane, data }));
       server.onMessage((raw) => {
         const frame = JSON.parse(String(raw));
         if (frame.type === "input-ready") ready = frame.ready !== false;
@@ -97,6 +100,19 @@ export async function checkIpadIme(browser: Browser, origin: string, pane: strin
       await fresh("ㄱ"); await replace("ㅡ", "그"); await replace("ㄹ", "글");
       await input.press("Space");
       await check("abc한글 ", "English then iPad Hangul commits each syllable once, in order");
+      // the syllable being typed is drawn at the size its row gives the committed ones
+      // (terminalGlyphs enlarges a two-cell glyph that leaves its cells half empty)
+      toPage("\r\n한 ");
+      await page.waitForFunction(() => [...document.querySelectorAll(".xterm-rows span")].some((span) => span.textContent?.includes("한")));
+      await fresh("ㄱ"); await replace("ㅡ", "그");
+      const sizes = await page.evaluate(() => {
+        const row = [...document.querySelectorAll<HTMLElement>(".xterm-rows span")].find((span) => span.textContent?.includes("한"))!;
+        const view = document.querySelector<HTMLElement>(".composition-view")!;
+        return { row: getComputedStyle(row).fontSize, view: getComputedStyle(view).fontSize, pending: view.classList.contains("active") ? view.textContent : null };
+      });
+      assert.equal(sizes.pending, "그", "a syllable is pending");
+      assert(Math.abs(Number.parseFloat(sizes.view) - Number.parseFloat(sizes.row)) < 0.01,
+        `the pending syllable is drawn at its row's size: ${sizes.view} against ${sizes.row} (platform ${platform})`);
 
       await reset();
       // 망 then ㅏ: the final ㅇ moves on and the editor puts back two syllables at once
@@ -132,7 +148,7 @@ export async function checkIpadIme(browser: Browser, origin: string, pane: strin
     }
   }
   } finally { await context.close(); }
-  console.log("PASS iPad hardware-keyboard replay: jamo keys composed in the editor, commit keys, two-syllable replacement, blur and pane reset");
+  console.log("PASS iPad hardware-keyboard replay: jamo keys composed in the editor, pending syllable at its row's size, commit keys, two-syllable replacement, blur and pane reset");
 }
 
 if (import.meta.main) {

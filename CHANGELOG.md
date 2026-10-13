@@ -80,6 +80,9 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 - Korean typed on an iPad with a hardware keyboard (Magic Keyboard) reaches the terminal as whole
   syllables again. iPadOS Safari sent each jamo as its own key, so 한 arrived as ㅎㅏㄴ; the
   terminal now lets the iPad compose the syllable and sends it once, before the next key.
+- The syllable being typed in the terminal is drawn at the size of the ones already typed. On Apple
+  devices the terminal enlarges Hangul to fill its two cells, but the box that shows the pending
+  syllable kept the plain size, so the last syllable looked smaller until it was committed.
 - A message another Claude Code session sends into a pane (its `peer` messages) shows in the chat as
   a folded **Message from another session: {name}** that opens its own turn, instead of being skipped so the work it
   started was appended to the answer before it.
