@@ -358,8 +358,11 @@ export function adjustTerminalGlyphs(term: Terminal): () => void {
     // a span), which a canvas can measure differently (Hangul on macOS WebKit: 13px against 11.2px)
     const xtermMeasure = term.element?.querySelector<HTMLElement>(".xterm-width-cache-measure-container .xterm-char-measure-element");
     if (view.classList.contains("active") && cellWidth > 0 && xtermMeasure) {
+      // xterm's own element: what it held goes back once the width is read
+      const held = xtermMeasure.textContent;
       xtermMeasure.textContent = first.repeat(XTERM_MEASURE_REPEAT);
       const drawn = xtermMeasure.offsetWidth / XTERM_MEASURE_REPEAT;
+      xtermMeasure.textContent = held;
       measure.font = `${fontWeight} ${fontSize}px ${fontFamily}`;
       const glyphWidth = measure.measureText(first).width;
       // a glyph wider than its one cell takes two in the row
