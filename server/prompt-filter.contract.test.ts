@@ -45,6 +45,7 @@ process.stdin.on("data", (data) => {
   for (const ch of data.toString("utf8")) {
     if (ch === "\\x7f" || ch === "\\b") filter = filter.slice(0, -1);
     else if (ch === "\\x1b") open = false;
+    else if (!open && ch === "r") { open = true; filter = ""; models.reverse(); }
     else if (ch >= " ") filter += ch;
   }
   draw();
@@ -87,6 +88,9 @@ describe("a model list's search box", () => {
     const gpt = await (await search(pane, first.id, "gpt")).json() as { prompt: Card };
     expect(gpt.prompt?.filter).toEqual({ text: "gpt" });
     expect(gpt.prompt?.options.map((option) => option.label)).toEqual(["gpt-5.5 [chatgpt-subscription]", "gpt-6-sol [chatgpt-subscription]", "gpt-6-astra [chatgpt-subscription]"]);
+    // a card typing ahead of the last answer still sends the id it started from, which still counts
+    const ahead = await (await search(pane, first.id, " gpt-6 ")).json() as { prompt: Card };
+    expect(ahead.prompt?.filter).toEqual({ text: "gpt-6" });
 
     // a different word replaces the old one: only what differs is erased and typed
     const astra = await (await search(pane, gpt.prompt!.id, "gpt-6-a")).json() as { prompt: Card };
@@ -96,6 +100,15 @@ describe("a model list's search box", () => {
     expect(none.prompt?.question).toBe('No model matches "zzz"');
     const back = await (await search(pane, none.prompt!.id, "")).json() as { prompt: Card };
     expect(back.prompt?.options.length).toBe(5);
+
+    // a list opened since is not the one the card searched: a request it queued types nothing there
+    await paneSendKeys(pane, ["esc"]);
+    await until(async () => (await card(pane)) === null ? true : null, "the list closed");
+    await paneSendText(pane, "r");
+    const reopened = await until(async () => { const shown = await card(pane); return shown?.filter ? shown : null; }, "the list again");
+    expect(reopened.id).not.toBe(back.prompt!.id);
+    expect((await search(pane, back.prompt!.id, "gpt")).status).toBe(409);
+    expect((await card(pane))?.filter).toEqual({ text: "" });
 
     // the list gone, no key goes out: the search is refused
     await paneSendKeys(pane, ["esc"]);

@@ -3372,6 +3372,9 @@ const FILTER_TEXT_RE = /^[^\p{Cc}\p{Cf}]{0,64}$/u;
 /** how long a filter's keys get to show in the list before the list is answered as it is */
 const FILTER_SETTLE_MS = 1_500;
 
+/** per pane, the ids of the model lists filter requests have led through since the card's own id last matched */
+const filteredLists = new Map<string, Set<string>>();
+
 /**
  * POST /api/pane/prompt/filter: types `text` into the filter line of the model list on screen
  * (pi's or OmO's `/model`), replacing what the line held, and answers the list as it then shows.
@@ -3395,11 +3398,20 @@ async function filterModelList(request: Request, options: PromptRequestOptions):
     if (request.signal.aborted) return promptChanged();
     const shown = (await readPrompt(body.pane_id, options.codexHome)).prompt;
     if (!shown?.filter) return promptChanged();
+    // The id names the list as the card saw it, and each filter changes it (the rows are hashed),
+    // so a card typing ahead of its last answer sends an id this endpoint left behind. Such an id
+    // still counts while the list on screen is one this endpoint led to; a list opened since is
+    // not, and a request queued before it opened must not type into it.
+    const seen = filteredLists.get(body.pane_id);
+    if (shown.id === body.prompt_id) filteredLists.set(body.pane_id, new Set([shown.id]));
+    else if (!seen?.has(body.prompt_id) || !seen.has(shown.id)) return promptChanged();
+    const lineage = filteredLists.get(body.pane_id)!;
     const wanted = body.text.trim();
     if (shown.filter.text === wanted) return jsonResponse({ prompt: shown });
-    // only what differs: the shared start stays, the rest of the old filter is erased
+    // only what differs: the shared start stays, the rest of the old filter is erased. The screen
+    // shows no spaces around a filter, so none are typed either.
     const from = [...shown.filter.text];
-    const to = [...body.text];
+    const to = [...wanted];
     let same = 0;
     while (same < from.length && same < to.length && from[same] === to[same]) same += 1;
     if (from.length > same) await paneSendKeys(body.pane_id, Array.from({ length: from.length - same }, () => KEY.backspace));
@@ -3412,6 +3424,7 @@ async function filterModelList(request: Request, options: PromptRequestOptions):
       const next = (await readPrompt(body.pane_id, options.codexHome)).prompt;
       if (!next?.filter) continue;
       last = next;
+      lineage.add(next.id);
       if (next.filter.text === wanted) break;
     }
     return jsonResponse({ prompt: last });
