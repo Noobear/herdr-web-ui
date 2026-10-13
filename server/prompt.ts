@@ -119,6 +119,7 @@ type Responder =
   | "pi-confirm"
   | "pi-input"
   | "pi-model"
+  | "omo-model"
   | "hermes-question"
   | "hermes-input"
   | "fallback-menu"
@@ -1949,6 +1950,7 @@ function promptTailIsActive(prompt: ParsedPrompt, screen: string): boolean {
   // hint sits near the end without being it. A dialog already answered leaves its hint far
   // above whatever came after, which is what keeps this window narrow.
   if (prompt.responder === "pi-model") return hintAtEnd(shown, PI_MODEL_HINT_AT_END_RE, PI_FOOTER_LINES);
+  if (prompt.responder === "omo-model") return omoModelListWaits(screen);
   if (prompt.responder === "pi-question" || prompt.responder === "pi-confirm" || prompt.responder === "pi-input") {
     return hintAtEnd(shown, PI_MENU_HINT_AT_END_RE, PI_FOOTER_LINES, 4)
       || hintAtEnd(shown, PI_INPUT_HINT_AT_END_RE, PI_FOOTER_LINES, 4);
@@ -2072,7 +2074,7 @@ function piDialogRows(lines: string[], hintIndex: number): { rows: { line: strin
 /** a catalogue row names the provider serving the model, in brackets */
 const PI_MODEL_PROVIDER_RE = /\[[^\]]+\]/;
 /** the tail of a model's name a narrow pane wrapped onto its own line: only the provider's bracket */
-const PI_MODEL_TAIL_RE = /^\[[^\]]+\](\s*\u00b7\s*default)?$/;
+const PI_MODEL_TAIL_RE = /^\[[^\]]+\](\s*\u00b7\s*default)?(\s*[\u2713\u2714])?$/;
 
 /**
  * The catalogue `/model` lists under its filter line: every row names its provider in brackets,
@@ -2082,7 +2084,7 @@ const PI_MODEL_TAIL_RE = /^\[[^\]]+\](\s*\u00b7\s*default)?$/;
  * wrap is joined back first, and a row that still ends without its provider voids the reading,
  * because offering half a name would switch pi to a model that does not exist.
  */
-function piModelRows(lines: string[], startIndex: number): { label: string; cursor: boolean; current: boolean }[] | null {
+function piModelRows(lines: string[], startIndex: number, minRows = 2): { label: string; cursor: boolean; current: boolean }[] | null {
   const rows: { label: string; cursor: boolean; current: boolean }[] = [];
   // pi leaves a blank between its filter line and what still matches it
   let start = startIndex;
@@ -2126,7 +2128,7 @@ function piModelRows(lines: string[], startIndex: number): { label: string; curs
   // A name wrapped in the middle of its bracket is not a model pi can be switched to, and joining
   // what is left would invent one, so any row still missing its provider voids the whole reading.
   if (!rows.every((row) => PI_MODEL_PROVIDER_RE.test(row.label))) return null;
-  return rows.length >= 2 && rows.some((row) => row.cursor) ? rows : null;
+  return rows.length >= minRows && rows.some((row) => row.cursor) ? rows : null;
 }
 
 function parsePiModel(screen: string): ParsedPrompt | null {
@@ -2159,6 +2161,95 @@ function parsePiModel(screen: string): ParsedPrompt | null {
     responder: "pi-model", menuLabels: labels, selectedIndex, checkedOptionIndices: [], customMenuIndex: null,
     rejectWithEscapeIndex: null,
   });
+}
+
+/**
+ * OmO's `/model` (omo 5.1.30 and 5.1.32, engine senpi): pi's model selector as OmO draws it,
+ * fullscreen or not. Its keys stand over the filter line instead of under the catalogue —
+ *
+ *   enter select  ctrl+s select as default  ctrl+f favorite
+ *   > gpt
+ *   →   gpt-5.5 [chatgpt-subscription]
+ *       gpt-6-sol [chatgpt-subscription]
+ *     … 14 more below
+ *     Model Name: GPT-5.5
+ *
+ * — it ticks the model in use after its name (`claude-opus-4-8 [anthropic] ✓`), and it counts the
+ * rows below the window instead of numbering them. The rows are pi's catalogue rows
+ * (piModelRows): a narrow pane drops the provider's bracket onto a line of its own, and it is
+ * joined back the same way. herdr names the pane `omo`, or `pi`, `claude` or nothing at times
+ * (parsePrompt), so the hint, which no other program draws, is what tells the list apart.
+ */
+const OMO_MODEL_HINT_RE = /^enter select\s+ctrl\+s select as default\s+ctrl\+f favorite$/i;
+/** the filter line right under the hint: what was typed to narrow the catalogue, if anything */
+const OMO_MODEL_FILTER_RE = /^[\u203a>\u276f](?:\s+(.*))?$/;
+/** OmO's notes about its catalogue, which a pane may set at column zero */
+const OMO_MODEL_NOTE_RE = /^(?:Could not refresh|Refreshing model catalogs|Model catalogs refreshed)/i;
+/** OmO's tick on the model in use, after its name */
+const OMO_MODEL_TICK_RE = /\s*[\u2713\u2714]$/;
+
+function omoModelList(lines: string[]): { filterAt: number; rows: { label: string; cursor: boolean; current: boolean }[] } | null {
+  // the hint on one line, or wrapped onto a second by a narrow pane
+  let hintEnd = -1;
+  for (let index = lines.length - 1; index >= 0 && hintEnd < 0; index -= 1) {
+    const line = cleanLine(lines[index]!);
+    if (!line) continue;
+    if (OMO_MODEL_HINT_RE.test(line)) hintEnd = index;
+    else if (index + 1 < lines.length && OMO_MODEL_HINT_RE.test(`${line} ${cleanLine(lines[index + 1]!)}`)) hintEnd = index + 1;
+  }
+  if (hintEnd < 0) return null;
+  let filterAt = hintEnd + 1;
+  while (filterAt < lines.length && !cleanLine(lines[filterAt]!)) filterAt += 1;
+  if (filterAt >= lines.length || !OMO_MODEL_FILTER_RE.test(cleanLine(lines[filterAt]!))) return null;
+  // a filter can leave a single model, which is still a list to pick from
+  const rows = piModelRows(lines, filterAt + 1, 1);
+  if (rows === null) return null;
+  return { filterAt, rows: rows.map((row) => ({ ...row, label: row.label.replace(OMO_MODEL_TICK_RE, "") })) };
+}
+
+function parseOmoModel(screen: string): ParsedPrompt | null {
+  const list = omoModelList(screen.replace(ANSI_RE, "").split(/\r?\n/));
+  if (list === null) return null;
+  const labels = list.rows.map((row) => row.label);
+  const current = list.rows.find((row) => row.current);
+  return finishPrompt("omo", {
+    kind: "question",
+    title: "",
+    question: current ? `Select model (currently ${current.label})` : "Select model",
+    body: null,
+    options: labels.map((label) => ({ label, description: null })),
+    multi_select: false,
+    custom_option_index: null,
+  }, {
+    responder: "omo-model", menuLabels: labels, selectedIndex: list.rows.findIndex((row) => row.cursor), checkedOptionIndices: [], customMenuIndex: null,
+    rejectWithEscapeIndex: null,
+  });
+}
+
+/**
+ * Whether OmO's model list still holds the end of the screen: under its catalogue only OmO's own
+ * notes (`… 14 more below`, `Model Name: …`, indented), then one rule and the footer. A list
+ * answered or dismissed leaves no hint over a filter line, and one quoted elsewhere has
+ * something else under it.
+ */
+function omoModelListWaits(screen: string): boolean {
+  const lines = screen.replace(ANSI_RE, "").split(/\r?\n/);
+  const list = omoModelList(lines);
+  if (list === null) return false;
+  let rules = 0;
+  let footer = 0;
+  for (const raw of lines.slice(list.filterAt + 1)) {
+    const line = cleanLine(raw);
+    if (!line) continue;
+    if (SOLID_RULE_RE.test(line)) {
+      if (rules > 0 || footer > 0) return false;
+      rules = 1;
+    } else if (rules === 0) {
+      // the catalogue's rows, a wrapped provider tail, or one of OmO's notes under them
+      if (!/^\s/.test(raw) && !/^[\u2192\u276f\u279c]/.test(line) && !PI_MODEL_TAIL_RE.test(line) && !OMO_MODEL_NOTE_RE.test(line)) return false;
+    } else if (++footer > OMO_FOOTER_LINES || OMO_NOT_FOOTER_RE.test(line)) return false;
+  }
+  return rules === 1;
 }
 
 function parsePiDialog(screen: string, moved = false): ParsedPrompt | null {
@@ -2319,13 +2410,13 @@ function parsePrompt(agent: string, screen: string, omoAsk: OmoAsk | null = null
       // `pi` reads pi's own dialogs first: pi's hint is its own, so an omo form never matches
       // it and falls through to omo()'s parsers.
       : agent === "claude"
-        ? [parseClaudeQuestion(screen), parseClaudeSubmit(screen), parseClaudeApproval(screen), parseClaudeConfirm(screen), parseClaudeModel(screen), parseClaudeEffort(screen), parseClaudeHeld(screen, sent, working), ...omo()]
+        ? [parseClaudeQuestion(screen), parseClaudeSubmit(screen), parseClaudeApproval(screen), parseClaudeConfirm(screen), parseClaudeModel(screen), parseClaudeEffort(screen), parseClaudeHeld(screen, sent, working), parseOmoModel(screen), ...omo()]
         : agent === "pi"
-          ? [parsePiModel(screen), parsePiDialog(screen), ...omo()]
+          ? [parsePiModel(screen), parseOmoModel(screen), parsePiDialog(screen), ...omo()]
         : agent === "hermes"
           ? [parseHermesClarify(screen)]
         : agent === "omo" || agent === ""
-          ? omo()
+          ? [parseOmoModel(screen), ...omo()]
           : [];
   return candidates.find((candidate): candidate is ParsedPrompt => candidate !== null && promptTailIsActive(candidate, screen)) ?? null;
 }
@@ -3373,7 +3464,7 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
         // Claude's unnumbered rows and pi's models are read with no number to aim at: looked at
         // again before the Enter even when it needs no move. So is Claude's model list, picked
         // with a letter: typed after the list has gone, it would stand in the agent's own prompt
-        let moved = responder === "claude-confirm" || responder === "pi-model" || responder === "omo-question" || responder === "claude-model" || responder === "claude-effort" || responder === "codex-model" || responder === "fallback-gjc-menu";
+        let moved = responder === "claude-confirm" || responder === "pi-model" || responder === "omo-model" || responder === "omo-question" || responder === "claude-model" || responder === "claude-effort" || responder === "codex-model" || responder === "fallback-gjc-menu";
         // Claude's and Codex's model lists: a window on a list, picked with a letter; Claude's effort
         // slider the same way, its levels side by side
         const list = responder === "claude-model" || responder === "claude-effort" || responder === "codex-model";
@@ -3388,7 +3479,7 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
           // rows on screen, and with them the card's id, change on the way down: what must
           // hold is the model under the cursor, by name. A wrong model, unlike a wrong menu
           // entry, answers every later turn silently
-          if (responder === "pi-model") return shown?.responder === "pi-model" && shown.options[shown.selectedIndex]?.label === parsed.options[cursor]?.label;
+          if (responder === "pi-model" || responder === "omo-model") return shown?.responder === responder && shown.options[shown.selectedIndex]?.label === parsed.options[cursor]?.label;
           // Claude's list is a window too, drawn with fewer rows in a pane made shorter meanwhile:
           // the model under the cursor, by its number in the list, its name and what the row says
           // Codex's lists the same way, the list's title with the row: the reasoning levels of

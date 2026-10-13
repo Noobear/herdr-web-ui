@@ -3610,6 +3610,10 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
         draw: (at) => `────────────────────────────────────────\n\nOnly showing models from configured providers. Use /login to add providers.\n>\n\n${at === 0 ? "→" : " "} ✓ vllm/Qwen/Qwen3.8-27B [lwsa-platform] · default\n${at === 1 ? "→" : " "}   vllm-flash/Qwen3.8-Flash-Next [lwsa-platform]\n Enter to select · Ctrl+S to set as default · Escape/Ctrl+C to cancel\n────────────────────────────────────────${FOOTER}`,
       },
       {
+        name: "OmO's model list", agent: "omo", status: "idle", rows: 3, choice: { option_index: 2 }, sent: ["down", "down", "enter"],
+        draw: (at) => `Only showing models from configured providers. Use /login to add providers.\nenter select  ctrl+s select as default  ctrl+f favorite\n>\n${["claude-opus-4-8 [anthropic] ✓", "claude-fable-5 [anthropic]", "gpt-5.5 [chatgpt-subscription]"].map((row, index) => `${at === index ? "→" : " "}   ${row}`).join("\n")}\n  Model Name: Claude Opus 4.8\n${"─".repeat(40)}\n/tmp/app • $0.000 (sub) • 0/1M (0.0%) (auto)  (anthropic) claude-opus-4-8 • effort medium\n(😺 OmO Native)\n`,
+      },
+      {
         // the last row drawn carries the cursor where it carried `↓`, under another effort line
         name: "Claude's model list, to the last row it draws", agent: "claude", status: "idle", rows: 10, start: 1, choice: { option_index: 9 },
         sent: [...Array.from({ length: 8 }, () => "down"), "text:s"],
@@ -4610,5 +4614,166 @@ describe("Claude Code's model list under a hint wrapped anywhere", () => {
     const quoted = `${CLAUDE_MODEL_CLOSED}⏺ Example: Enter to set as default · s to use this session only · Esc to\n  cancel\n──────────── Summary ─\n`;
     expect(modelListWaits("claude", quoted)).toBe(false);
     expect(modelListWaits("claude", `⏺ Enter to set as default · s to use this session only · Esc to cancel\n`)).toBe(false);
+  });
+});
+
+
+// Captured from OmO 5.1.30 (engine senpi 2026.10.11) running /model in an isolated herdr session:
+// fullscreen at 120 columns, after `gpt` was typed and the cursor moved down, and at 46 columns.
+describe("OmO's model list", () => {
+  const wide = `Only showing models from configured providers. Use /login to add providers.
+
+enter select ctrl+s select as default ctrl+f favorite
+
+>
+
+→   claude-opus-4-8 [anthropic] ✓
+    claude-fable-5 [anthropic]
+    claude-fable-5-1 [anthropic]
+    claude-haiku-4-5 [anthropic]
+    claude-haiku-4-5-20251001 [anthropic]
+    claude-haiku-5-5 [anthropic]
+    claude-opus-4-5 [anthropic]
+    claude-opus-4-5-20251101 [anthropic]
+    claude-opus-4-6 [anthropic]
+    claude-opus-4-7 [anthropic]
+    claude-opus-5 [anthropic]
+    claude-opus-5-5 [anthropic]
+    claude-sonnet-4-5 [anthropic]
+    claude-sonnet-4-5-20250929 [anthropic]
+    claude-sonnet-4-6 [anthropic]
+    claude-sonnet-5 [anthropic]
+    claude-sonnet-5-5 [anthropic]
+    gpt-5.3-codex-spark [chatgpt-subscription]
+    gpt-5.5 [chatgpt-subscription]
+    gpt-5.6-luna [chatgpt-subscription]
+  … 14 more below
+
+  Model Name: Claude Opus 4.8
+
+  Model catalogs refreshed.
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+/private/tmp/model-probe-cwd • $0.000 (sub) • 0/1M (0.0%) (auto)            (anthropic) claude-opus-4-8 • effort medium
+(😺 OmO Native by Q Kim)
+`;
+  const moved = `Only showing models from configured providers. Use /login to add providers.
+
+enter select ctrl+s select as default ctrl+f favorite
+
+> gpt
+
+    gpt-5.5 [chatgpt-subscription]
+→   gpt-6-sol [chatgpt-subscription]
+    gpt-6-luna [chatgpt-subscription]
+    gpt-5.6-sol [chatgpt-subscription]
+    gpt-6-astra [chatgpt-subscription]
+    gpt-6.1-sol [chatgpt-subscription]
+    gpt-5.6-luna [chatgpt-subscription]
+    gpt-5.6-terra [chatgpt-subscription]
+    gpt-6-sol-fast [chatgpt-subscription]
+    gpt-6-luna-fast [chatgpt-subscription]
+    gpt-5.6-sol-fast [chatgpt-subscription]
+    gpt-6-astra-fast [chatgpt-subscription]
+    gpt-6.1-sol-fast [chatgpt-subscription]
+    gpt-5.6-luna-fast [chatgpt-subscription]
+    gpt-5.6-terra-fast [chatgpt-subscription]
+    gpt-5.3-codex-spark [chatgpt-subscription]
+    gpt-6.1-sol-ultrafast [chatgpt-subscription]
+
+  Model Name: GPT-6 Sol
+
+  Model catalogs refreshed.
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+/private/tmp/model-probe-cwd • $0.000 (sub) • 0/1M (0.0%) (auto)            (anthropic) claude-opus-4-8 • effort medium
+(😺 OmO Native by Q Kim)
+`;
+  const narrow = `Only showing models from configured providers.
+Use /login to add providers.
+
+enter select ctrl+s select as default ctrl+f
+favorite
+
+> gpt
+
+→   gpt-5.5 [chatgpt-subscription]
+    gpt-6-sol [chatgpt-subscription]
+    gpt-6-luna [chatgpt-subscription]
+    gpt-5.6-sol [chatgpt-subscription]
+    gpt-6-astra [chatgpt-subscription]
+    gpt-6.1-sol [chatgpt-subscription]
+    gpt-5.6-luna [chatgpt-subscription]
+    gpt-5.6-terra [chatgpt-subscription]
+    gpt-6-sol-fast [chatgpt-subscription]
+    gpt-6-luna-fast [chatgpt-subscription]
+    gpt-5.6-sol-fast [chatgpt-subscription]
+    gpt-6-astra-fast [chatgpt-subscription]
+    gpt-6.1-sol-fast [chatgpt-subscription]
+    gpt-5.6-luna-fast [chatgpt-subscription]
+    gpt-5.6-terra-fast [chatgpt-subscription]
+    gpt-5.3-codex-spark [chatgpt-subscription]
+    gpt-6.1-sol-ultrafast
+[chatgpt-subscription]
+
+  Model Name: GPT-5.5
+
+  Model catalogs refreshed.
+
+──────────────────────────────────────────────
+… • 0/1M (0.0%) (auto)  claude-opus-4-8:medium
+(😺 OmO Native by Q Kim)
+`;
+
+  test("reads the catalogue under OmO's filter line, naming the model in use", () => {
+    const prompt = parseInteractivePrompt("omo", wide)!;
+    expect(prompt.kind).toBe("question");
+    expect(prompt.question).toBe("Select model (currently claude-opus-4-8 [anthropic])");
+    // the tick OmO sets after the name is not part of it, and the count of rows below is no row
+    expect(prompt.options[0]!.label).toBe("claude-opus-4-8 [anthropic]");
+    expect(prompt.options.length).toBe(20);
+    expect(prompt.options.some((option) => /more below|Model Name|catalogs/.test(option.label))).toBe(false);
+    expect(answerKeys(prompt, { option_index: 2 })).toEqual([{ keys: ["down"] }, { keys: ["down"] }, { keys: ["enter"] }]);
+  });
+
+  test("reads what a filter left, from where the cursor stands", () => {
+    const prompt = parseInteractivePrompt("omo", moved)!;
+    expect(prompt.options[0]!.label).toBe("gpt-5.5 [chatgpt-subscription]");
+    expect(prompt.options[1]!.label).toBe("gpt-6-sol [chatgpt-subscription]");
+    // no tick among a filter's rows that leave the model in use out
+    expect(prompt.question).toBe("Select model");
+    expect(answerKeys(prompt, { option_index: 0 })).toEqual([{ keys: ["up"] }, { keys: ["enter"] }]);
+  });
+
+  test("reads a phone's pane, its hint and a model's provider wrapped onto lines of their own", () => {
+    const prompt = parseInteractivePrompt("omo", narrow)!;
+    expect(prompt).not.toBeNull();
+    expect(prompt.options.at(-1)!.label).toBe("gpt-6.1-sol-ultrafast [chatgpt-subscription]");
+    expect(prompt.options.every((option) => /\[[^\]]+\]$/.test(option.label))).toBe(true);
+  });
+
+  test("is read whatever herdr calls the pane", () => {
+    // herdr names an OmO pane `pi` or `claude` at times, or nothing
+    for (const agent of ["pi", "claude", ""]) {
+      const prompt = parseInteractivePrompt(agent, wide);
+      expect(prompt?.question).toBe("Select model (currently claude-opus-4-8 [anthropic])");
+      expect(prompt?.options.length).toBe(20);
+    }
+  });
+
+  test("still offers a filter that left a single model", () => {
+    const lines = moved.split("\n");
+    const first = lines.findIndex((line) => line.includes("gpt-5.5 [chatgpt-subscription]"));
+    const last = lines.findIndex((line) => line.includes("Model Name:"));
+    const one = [...lines.slice(0, first), "→   gpt-5.5 [chatgpt-subscription]", ...lines.slice(last)].join("\n");
+    const prompt = parseInteractivePrompt("omo", one)!;
+    expect(prompt.options.map((option) => option.label)).toEqual(["gpt-5.5 [chatgpt-subscription]"]);
+  });
+
+  test("is gone once the list is: dismissed, or quoted with other text under it", () => {
+    expect(parseInteractivePrompt("omo", wide.replace(/enter select +ctrl\+s select as default +ctrl\+f favorite\n/, ""))).toBeNull();
+    const rule = wide.lastIndexOf("─");
+    expect(parseInteractivePrompt("omo", `${wide.slice(0, wide.indexOf("Model Name"))}some other output\n${wide.slice(wide.indexOf("Model Name"))}`)).toBeNull();
+    expect(rule).toBeGreaterThan(0);
   });
 });
