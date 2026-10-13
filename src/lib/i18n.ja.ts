@@ -1035,4 +1035,7 @@ export const JA: Record<string, string> = {
   "Reading the plan…": "計画を読み込み中…",
   "Couldn't read the plan. Trying again…": "計画を読み込めませんでした。再試行しています…",
   "Only part of this file is shown. Download it to read the rest.": "ファイルの一部のみ表示しています。残りはダウンロードしてお読みください。",
+  "Search models": "モデルを検索",
+  "Hide the on-screen keyboard": "画面キーボードを隠す",
+  "For a tablet used with its hardware keyboard: typing into the terminal raises no on-screen keyboard and no shortcut bar over the pane. Switch the input language in the message box first; the terminal keeps it. Leave this off on a device without a keyboard.": "ハードウェアキーボードで使うタブレット向けです。ターミナルへの入力で画面キーボードもペイン上のショートカットバーも出ません。入力言語はメッセージ欄で先に切り替えると、ターミナルにも引き継がれます。キーボードのない端末ではオフにしてください。",
 };

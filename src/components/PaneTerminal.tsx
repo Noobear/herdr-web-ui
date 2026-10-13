@@ -2042,11 +2042,13 @@ export function PaneTerminal({
       textarea.setAttribute("inputmode", "none");
       if (document.activeElement === textarea) textarea.blur();
     } else {
-      textarea.removeAttribute("inputmode");
+      // a tablet typed on with its hardware keyboard: no on-screen keyboard, and no shortcut bar over the pane
+      if (settings.hideKeyboardBar) textarea.setAttribute("inputmode", "none");
+      else textarea.removeAttribute("inputmode");
       // only the selected pane: a focused sibling would take the selection (PaneCanvas onFocusCapture)
       if (activeRef.current && coarse && !chatView && turnedOn) termRef.current?.focus();
     }
-  }, [inputLine, coarse, chatView, directTyping, paneId]);
+  }, [inputLine, coarse, chatView, directTyping, paneId, settings.hideKeyboardBar]);
 
   // the composer's stop button: Escape interrupts the agent's current turn in every
   // supported TUI (Claude Code, omp, codex) without killing the process the way ^C would

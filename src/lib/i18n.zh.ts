@@ -1037,4 +1037,7 @@ export const ZH: Record<string, string> = {
   "Reading the plan…": "正在读取计划…",
   "Couldn't read the plan. Trying again…": "无法读取计划，正在重试…",
   "Only part of this file is shown. Download it to read the rest.": "仅显示文件的一部分。请下载文件以阅读其余内容。",
+  "Search models": "搜索模型",
+  "Hide the on-screen keyboard": "隐藏屏幕键盘",
+  "For a tablet used with its hardware keyboard: typing into the terminal raises no on-screen keyboard and no shortcut bar over the pane. Switch the input language in the message box first; the terminal keeps it. Leave this off on a device without a keyboard.": "适用于搭配实体键盘使用的平板：在终端中输入时不弹出屏幕键盘，也不在窗格上方显示快捷栏。请先在消息框中切换输入语言，终端会沿用。没有键盘的设备请保持关闭。",
 };

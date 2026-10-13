@@ -104,6 +104,9 @@ export interface Settings {
   releasePaneAway: boolean;
   /** a split pane under 80 columns draws in a smaller font to reach them (lib/narrowPaneFont.ts). Off: every pane keeps terminalFontSize. */
   narrowPaneFont: boolean;
+  /** typing straight into the terminal raises no on-screen keyboard (xterm's textarea gets inputmode="none"), and with it
+   *  no iPad shortcut bar over the pane: for a tablet used with its hardware keyboard. Off: the system keyboard as usual. */
+  hideKeyboardBar: boolean;
   /** chat text size in px (its body text; the rest scales with it); null follows the density */
   chatFontSize: number | null;
   /** fonts tried before the UI font in the chat's prose (code stays mono), as a CSS font-family list; "" keeps the UI font */
@@ -289,6 +292,7 @@ export const DEFAULT_SETTINGS: Settings = {
   paneClipboard: true,
   releasePaneAway: false,
   narrowPaneFont: true,
+  hideKeyboardBar: false,
   chatFontSize: null,
   chatFontFamily: "",
   chatWidth: "default",
@@ -463,6 +467,7 @@ export function sanitizeSettings(raw: unknown): Settings {
     paneClipboard: typeof record["paneClipboard"] === "boolean" ? record["paneClipboard"] : DEFAULT_SETTINGS.paneClipboard,
     releasePaneAway: typeof record["releasePaneAway"] === "boolean" ? record["releasePaneAway"] : DEFAULT_SETTINGS.releasePaneAway,
     narrowPaneFont: typeof record["narrowPaneFont"] === "boolean" ? record["narrowPaneFont"] : DEFAULT_SETTINGS.narrowPaneFont,
+    hideKeyboardBar: typeof record["hideKeyboardBar"] === "boolean" ? record["hideKeyboardBar"] : DEFAULT_SETTINGS.hideKeyboardBar,
     chatFontFamily: sanitizeFontFamily(record["chatFontFamily"]),
     chatWidth: CHAT_WIDTHS.includes(record["chatWidth"] as ChatWidth) ? record["chatWidth"] as ChatWidth : DEFAULT_SETTINGS.chatWidth,
     enterSends: typeof record["enterSends"] === "boolean" ? record["enterSends"] : DEFAULT_SETTINGS.enterSends,
