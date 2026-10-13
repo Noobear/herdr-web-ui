@@ -1297,6 +1297,9 @@ export function PaneTerminal({
         return;
       }
       if (socket.sendInput(current, input)) return;
+      // the built-in Korean input's open syllable never reached the pane: rewriting it would DEL
+      // what is not there
+      hangulCommitRef.current();
       // A closed socket, an attachment still opening, or a failed synchronous send:
       // keep printable input for explicit review, never replay it automatically.
       if (draftPaneRef.current !== current) {
