@@ -986,4 +986,5 @@ export const TR: Record<string, string> = {
   "Reading the plan…": "Plan okunuyor…",
   "Couldn't read the plan. Trying again…": "Plan okunamadı. Tekrar deneniyor…",
   "Only part of this file is shown. Download it to read the rest.": "Bu dosyanın yalnızca bir bölümü gösteriliyor. Gerisini okumak için indirin.",
+  "Search models": "Model ara",
 };

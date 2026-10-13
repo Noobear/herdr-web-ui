@@ -1035,4 +1035,5 @@ export const ZH: Record<string, string> = {
   "Reading the plan…": "正在读取计划…",
   "Couldn't read the plan. Trying again…": "无法读取计划，正在重试…",
   "Only part of this file is shown. Download it to read the rest.": "仅显示文件的一部分。请下载文件以阅读其余内容。",
+  "Search models": "搜索模型",
 };

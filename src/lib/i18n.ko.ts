@@ -1031,4 +1031,5 @@ export const KO: Record<string, string> = {
   "Reading the plan…": "계획을 읽는 중…",
   "Couldn't read the plan. Trying again…": "계획을 읽지 못했습니다. 다시 시도하는 중…",
   "Only part of this file is shown. Download it to read the rest.": "파일의 일부만 표시됩니다. 나머지는 다운로드해 확인하세요.",
+  "Search models": "모델 검색",
 };

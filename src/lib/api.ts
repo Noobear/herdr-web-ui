@@ -35,6 +35,7 @@ import type {
   PaneFindResponse,
   PlanStep,
   PromptAnswer,
+  PromptFilter,
   PushKey,
   PortalStatus,
   RemoteAccess,
@@ -688,6 +689,16 @@ export async function fetchPanePromptState(paneId: string, machineId = "local"):
     suggestion: typeof body.suggestion === "string" && body.suggestion !== "" ? body.suggestion : null,
     restored: typeof body.restored === "string" && body.restored !== "" ? body.restored : null,
   };
+}
+
+/**
+ * POST /api/pane/prompt/filter: types a search into the model list on screen, replacing what its
+ * filter line held, and answers the list as it then shows. ApiError 409 `prompt_changed` once no
+ * model list is on screen.
+ */
+export async function filterPanePrompt(filter: PromptFilter, machineId = "local"): Promise<InteractivePrompt | null> {
+  const response = await sendJson(machinePath(machineId, "pane/prompt/filter"), "POST", filter);
+  return ((await response.json()) as { prompt: InteractivePrompt | null }).prompt;
 }
 
 /** POST /api/pane/prompt/answer: ApiError 409 `prompt_changed` when the menu moved on. */

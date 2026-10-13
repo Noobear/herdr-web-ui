@@ -1033,4 +1033,5 @@ export const JA: Record<string, string> = {
   "Reading the plan…": "計画を読み込み中…",
   "Couldn't read the plan. Trying again…": "計画を読み込めませんでした。再試行しています…",
   "Only part of this file is shown. Download it to read the rest.": "ファイルの一部のみ表示しています。残りはダウンロードしてお読みください。",
+  "Search models": "モデルを検索",
 };

@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 
-import type { HerdrPane, InteractivePrompt, PromptAnswer } from "../shared/protocol.ts";
+import type { HerdrPane, InteractivePrompt, PromptAnswer, PromptFilter } from "../shared/protocol.ts";
 import { codexTranscriptPath, paneCodexHome, unansweredCodexQuestions, type QueuedQuestion } from "./codex.ts";
 import { HerdrError, paneRead, paneScrollInfo, paneSendKeys, paneSendText, sessionSnapshot } from "./herdr/client.ts";
 import { omoTranscriptForPane } from "./omo.ts";
@@ -304,6 +304,7 @@ function publicPrompt(parsed: ParsedPrompt): InteractivePrompt {
     ...(parsed.queued ? { queued: parsed.queued } : {}),
     ...(parsed.steps ? { steps: parsed.steps } : {}),
     ...(parsed.fallback ? { fallback: true as const } : {}),
+    ...(parsed.filter ? { filter: parsed.filter } : {}),
   };
   parsedByPublicPrompt.set(prompt, parsed);
   return prompt;
@@ -2020,7 +2021,7 @@ function hintAtEnd(shown: string[], atEnd: RegExp, footerLines: number, span = 3
   return false;
 }
 /** `/model` types a filter into this line, then lists what is left under it */
-const PI_MODEL_FILTER_RE = /^[\u203a>\u276f]\s*$/;
+const PI_MODEL_FILTER_RE = /^[\u203a>\u276f](?:\s+(.*))?$/;
 /** pi ticks the model answering now, and marks the one it starts on with `· default` */
 const PI_MODEL_CURRENT_RE = /[\u2713\u2714]/;
 const PI_MODEL_DEFAULT_RE = /\s*\u00b7\s*default$/;
@@ -2131,6 +2132,20 @@ function piModelRows(lines: string[], startIndex: number, minRows = 2): { label:
   return rows.length >= minRows && rows.some((row) => row.cursor) ? rows : null;
 }
 
+/**
+ * Whether a filter matched nothing: the first line under the filter line is no catalogue row (no
+ * cursor, no provider bracket) but pi's note or hint, or OmO's `No matching models`. A row still
+ * being drawn has its bracket, so it never reads as this.
+ */
+function noModelRows(lines: string[], start: number): boolean {
+  for (let index = start; index < lines.length; index += 1) {
+    const line = cleanLine(lines[index]!);
+    if (!line) continue;
+    return !line.includes("[") && !line.match(PI_ROW_RE)?.[1];
+  }
+  return true;
+}
+
 function parsePiModel(screen: string): ParsedPrompt | null {
   const lines = screen.replace(ANSI_RE, "").split(/\r?\n/);
   const hintIndex = findLastIndex(lines, (_, index) => PI_MODEL_HINT_RE.test(wrapped(lines, index)));
@@ -2139,15 +2154,18 @@ function parsePiModel(screen: string): ParsedPrompt | null {
   // belongs to whatever the pane showed before `/model` was typed
   const filterIndex = findLastIndex(lines.slice(0, hintIndex), (line) => PI_MODEL_FILTER_RE.test(cleanLine(line)));
   if (filterIndex < 0) return null;
-  const rows = piModelRows(lines, filterIndex + 1);
+  // what was typed to narrow the list: the card's search box starts from it. A filter can leave a
+  // single model, or none, and the list stays a card either way, so the box is not lost mid-word
+  const text = cleanLine(lines[filterIndex]!).match(PI_MODEL_FILTER_RE)?.[1]?.trim() ?? "";
+  const rows = piModelRows(lines, filterIndex + 1, text ? 1 : 2) ?? (text && noModelRows(lines, filterIndex + 1) ? [] : null);
   if (rows === null) return null;
   const selectedIndex = rows.findIndex((row) => row.cursor);
   const labels = rows.map((row) => row.label);
   // the card names the model answering now, because the answer switches it and whoever taps
   // should know what they are switching from; pi's tick is the only mark that says so
   const current = rows.find((row) => row.current);
-  const question = current
-    ? `Select model (currently ${current.label.replace(PI_MODEL_DEFAULT_RE, "")})`
+  const question = rows.length === 0 ? `No model matches "${text}"`
+    : current ? `Select model (currently ${current.label.replace(PI_MODEL_DEFAULT_RE, "")})`
     : "Select model";
   return finishPrompt("pi", {
     kind: "question",
@@ -2157,6 +2175,7 @@ function parsePiModel(screen: string): ParsedPrompt | null {
     options: labels.map((label) => ({ label, description: null })),
     multi_select: false,
     custom_option_index: null,
+    filter: { text },
   }, {
     responder: "pi-model", menuLabels: labels, selectedIndex, checkedOptionIndices: [], customMenuIndex: null,
     rejectWithEscapeIndex: null,
@@ -2188,7 +2207,7 @@ const OMO_MODEL_NOTE_RE = /^(?:Could not refresh|Refreshing model catalogs|Model
 /** OmO's tick on the model in use, after its name */
 const OMO_MODEL_TICK_RE = /\s*[\u2713\u2714]$/;
 
-function omoModelList(lines: string[]): { filterAt: number; rows: { label: string; cursor: boolean; current: boolean }[] } | null {
+function omoModelList(lines: string[]): { filterAt: number; text: string; rows: { label: string; cursor: boolean; current: boolean }[] } | null {
   // the hint on one line, or wrapped onto a second by a narrow pane
   let hintEnd = -1;
   for (let index = lines.length - 1; index >= 0 && hintEnd < 0; index -= 1) {
@@ -2201,10 +2220,12 @@ function omoModelList(lines: string[]): { filterAt: number; rows: { label: strin
   let filterAt = hintEnd + 1;
   while (filterAt < lines.length && !cleanLine(lines[filterAt]!)) filterAt += 1;
   if (filterAt >= lines.length || !OMO_MODEL_FILTER_RE.test(cleanLine(lines[filterAt]!))) return null;
-  // a filter can leave a single model, which is still a list to pick from
-  const rows = piModelRows(lines, filterAt + 1, 1);
+  const text = cleanLine(lines[filterAt]!).match(OMO_MODEL_FILTER_RE)?.[1]?.trim() ?? "";
+  // a filter can leave a single model, which is still a list to pick from, or none (`No matching
+  // models`), which stays a card so its search box is not lost mid-word
+  const rows = piModelRows(lines, filterAt + 1, 1) ?? (text && noModelRows(lines, filterAt + 1) ? [] : null);
   if (rows === null) return null;
-  return { filterAt, rows: rows.map((row) => ({ ...row, label: row.label.replace(OMO_MODEL_TICK_RE, "") })) };
+  return { filterAt, text, rows: rows.map((row) => ({ ...row, label: row.label.replace(OMO_MODEL_TICK_RE, "") })) };
 }
 
 function parseOmoModel(screen: string): ParsedPrompt | null {
@@ -2215,11 +2236,12 @@ function parseOmoModel(screen: string): ParsedPrompt | null {
   return finishPrompt("omo", {
     kind: "question",
     title: "",
-    question: current ? `Select model (currently ${current.label})` : "Select model",
+    question: list.rows.length === 0 ? `No model matches "${list.text}"` : current ? `Select model (currently ${current.label})` : "Select model",
     body: null,
     options: labels.map((label) => ({ label, description: null })),
     multi_select: false,
     custom_option_index: null,
+    filter: { text: list.text },
   }, {
     responder: "omo-model", menuLabels: labels, selectedIndex: list.rows.findIndex((row) => row.cursor), checkedOptionIndices: [], customMenuIndex: null,
     rejectWithEscapeIndex: null,
@@ -3345,8 +3367,60 @@ export interface PromptRequestOptions {
   codexHome?: string;
 }
 
+/** what a model list's search box may type into its filter line: printable text, and short */
+const FILTER_TEXT_RE = /^[^\p{Cc}\p{Cf}]{0,64}$/u;
+/** how long a filter's keys get to show in the list before the list is answered as it is */
+const FILTER_SETTLE_MS = 1_500;
+
+/**
+ * POST /api/pane/prompt/filter: types `text` into the filter line of the model list on screen
+ * (pi's or OmO's `/model`), replacing what the line held, and answers the list as it then shows.
+ * The keys go out only while a model list is on screen, in the pane's turn: anywhere else they
+ * would be typed into the agent's prompt. The card the search came from need not be the one on
+ * screen, since every key of a search redraws the list, but a list must be: 409 otherwise.
+ */
+async function filterModelList(request: Request, options: PromptRequestOptions): Promise<Response> {
+  if (request.method !== "POST") return badRequest("method_not_allowed", "POST is required.");
+  let body: PromptFilter;
+  try {
+    body = await request.json() as PromptFilter;
+  } catch {
+    return badRequest("invalid_json", "The request body must be valid JSON.");
+  }
+  if (!body || typeof body !== "object") return badRequest("invalid_filter", "The filter body is required.");
+  if (typeof body.pane_id !== "string" || !body.pane_id.trim()) return badRequest("missing_pane_id", "pane_id is required.");
+  if (typeof body.text !== "string" || !FILTER_TEXT_RE.test(body.text)) return badRequest("invalid_filter", "text must be printable and at most 64 characters.");
+  const serialize = options.serialize ?? (<T>(_paneId: string, task: () => Promise<T>) => task());
+  return serialize(body.pane_id, async () => {
+    if (request.signal.aborted) return promptChanged();
+    const shown = (await readPrompt(body.pane_id, options.codexHome)).prompt;
+    if (!shown?.filter) return promptChanged();
+    const wanted = body.text.trim();
+    if (shown.filter.text === wanted) return jsonResponse({ prompt: shown });
+    // only what differs: the shared start stays, the rest of the old filter is erased
+    const from = [...shown.filter.text];
+    const to = [...body.text];
+    let same = 0;
+    while (same < from.length && same < to.length && from[same] === to[same]) same += 1;
+    if (from.length > same) await paneSendKeys(body.pane_id, Array.from({ length: from.length - same }, () => KEY.backspace));
+    if (to.length > same) await paneSendText(body.pane_id, to.slice(same).join(""));
+    // the list as the keys left it; a read mid-redraw that is no list is waited past, not answered
+    let last: InteractivePrompt = shown;
+    const deadline = Date.now() + FILTER_SETTLE_MS;
+    while (Date.now() < deadline && !request.signal.aborted) {
+      await Bun.sleep(60);
+      const next = (await readPrompt(body.pane_id, options.codexHome)).prompt;
+      if (!next?.filter) continue;
+      last = next;
+      if (next.filter.text === wanted) break;
+    }
+    return jsonResponse({ prompt: last });
+  });
+}
+
 export async function handlePromptRequest(request: Request, url: URL, options: PromptRequestOptions = {}): Promise<Response | null> {
-  if (url.pathname !== "/api/pane/prompt" && url.pathname !== "/api/pane/prompt/answer") return null;
+  if (url.pathname !== "/api/pane/prompt" && url.pathname !== "/api/pane/prompt/answer" && url.pathname !== "/api/pane/prompt/filter") return null;
+  if (url.pathname === "/api/pane/prompt/filter") return filterModelList(request, options);
   // the answer being handled, once its body was read: what the log line says even when the handling throws
   let answerLog: { paneId: string; matched: boolean } | null = null;
   try {

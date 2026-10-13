@@ -957,6 +957,9 @@ export interface InteractivePrompt {
   /** the last-resort card for a blocked pane no reader knows: answered with its own buttons only,
    * so a message typed in the chat still goes to the agent as typed */
   fallback?: true;
+  /** a model list that narrows as text is typed into it (pi's and OmO's /model): what its filter
+   * line holds now. The card offers a search box over the rows, which types into that line */
+  filter?: { text: string };
 }
 
 export interface InteractivePromptStep {
@@ -968,6 +971,13 @@ export interface InteractivePromptStep {
 export interface InteractivePromptOption {
   label: string;
   description: string | null;
+}
+
+/** POST /api/pane/prompt/filter body: `text` replaces what the model list's filter line holds. */
+export interface PromptFilter {
+  pane_id: string;
+  prompt_id: string;
+  text: string;
 }
 
 /** POST /api/pane/prompt/answer body. Exactly one of option_index / option_indices / custom_text. */

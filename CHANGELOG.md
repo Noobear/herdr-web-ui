@@ -11,6 +11,10 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 - OmO's `/model` list shows in the chat as a card, as Claude Code's and Codex's do: pick a model
   and it is picked for the session, the model in use named on the card. It reads the list OmO
   draws, fullscreen or not, on a phone's narrow pane too.
+- pi's and OmO's `/model` cards have a search box. What you type goes into the list's own filter
+  line, and the card shows the models the agent matches, its rows narrowing as you type; a search
+  that matches nothing keeps the card, so the box stays. A filter typed in the terminal shows on
+  the card within half a second while the list is open.
 - **Settings → Phone & devices → Portal** gives this PC a public HTTPS address through
   [Portal](https://github.com/gosuda/portal-tunnel), with no account and no domain of your own.
   With Portal v2.6.1 or later installed, **Start** runs it on a relay you enter, dropping any
