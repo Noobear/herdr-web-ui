@@ -3416,13 +3416,18 @@ async function filterModelList(request: Request, options: PromptRequestOptions):
     while (same < from.length && same < to.length && from[same] === to[same]) same += 1;
     if (from.length > same) await paneSendKeys(body.pane_id, Array.from({ length: from.length - same }, () => KEY.backspace));
     if (to.length > same) await paneSendText(body.pane_id, to.slice(same).join(""));
+    const onTheWay = new Set<string>();
+    for (let end = same; end <= from.length; end += 1) onTheWay.add(from.slice(0, end).join("").trim());
+    for (let end = same; end <= to.length; end += 1) onTheWay.add(to.slice(0, end).join("").trim());
     // the list as the keys left it; a read mid-redraw that is no list is waited past, not answered
     let last: InteractivePrompt = shown;
     const deadline = Date.now() + FILTER_SETTLE_MS;
     while (Date.now() < deadline && !request.signal.aborted) {
       await Bun.sleep(60);
       const next = (await readPrompt(body.pane_id, options.codexHome)).prompt;
-      if (!next?.filter) continue;
+      // only a list this search's own keys led to joins the lineage: one reopened meanwhile shows
+      // a filter that is not on the way from the old text to the new one
+      if (!next?.filter || !onTheWay.has(next.filter.text)) continue;
       last = next;
       lineage.add(next.id);
       if (next.filter.text === wanted) break;
