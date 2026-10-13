@@ -604,6 +604,11 @@ export function PaneTerminal({
       // here decides what the key types.
       const letter = plain && /^Key[A-Z]$/.test(event.code) ? event.code.slice(3) : null;
       if (letter !== null) {
+        // in Latin mode a Latin layout types its own letter (AZERTY, Dvorak); only a non-Latin one is read by position
+        if (!hangulModeRef.current && /^[\x20-\x7e]$/.test(event.key)) {
+          if (event.type === "keydown") hangulCommitRef.current();
+          return null;
+        }
         if (event.type === "keydown") {
           event.preventDefault();
           if (hangulModeRef.current) typeHangul(hangul.input(jamoForKey(event.code, event.shiftKey)!));
