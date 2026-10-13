@@ -1033,7 +1033,7 @@ export const KO: Record<string, string> = {
   "Reading the plan…": "계획을 읽는 중…",
   "Couldn't read the plan. Trying again…": "계획을 읽지 못했습니다. 다시 시도하는 중…",
   "Only part of this file is shown. Download it to read the rest.": "파일의 일부만 표시됩니다. 나머지는 다운로드해 확인하세요.",
-  "Search models": "모델 검색",
   "Hide the on-screen keyboard": "화면 키보드 숨기기",
-  "For a tablet used with its hardware keyboard: typing into the terminal raises no on-screen keyboard and no shortcut bar over the pane. Switch the input language in the message box first; the terminal keeps it. Leave this off on a device without a keyboard.": "하드웨어 키보드로 쓰는 태블릿용입니다. 터미널에 입력할 때 화면 키보드와 패널 위의 단축 막대가 뜨지 않습니다. 입력 언어는 메시지 입력창에서 먼저 바꾸면 터미널에도 이어집니다. 키보드가 없는 기기에서는 끄세요.",
+  "For a tablet used with its hardware keyboard: typing into the terminal raises no on-screen keyboard and no shortcut bar over the pane. The system keyboard stays in English there; Caps Lock switches the terminal's own Korean input on and off. Leave this off on a device without a keyboard.": "하드웨어 키보드로 쓰는 태블릿용입니다. 터미널에 입력할 때 화면 키보드와 패널 위의 단축 막대가 뜨지 않습니다. 이때 시스템 키보드는 영어로 두고, 한/영 키(Caps Lock)로 터미널 자체 한글 입력을 켜고 끕니다. 키보드가 없는 기기에서는 끄세요.",
+  "Korean input (Caps Lock)": "한글 입력 (Caps Lock)",
 };

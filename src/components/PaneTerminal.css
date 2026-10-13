@@ -83,6 +83,30 @@
   pointer-events: none;
 }
 
+/* The built-in Korean input (hideKeyboardBar): which language the keys type, clear of the history scrollbar. */
+.terminal-hangul-mode {
+  position: absolute;
+  right: calc(var(--terminal-history-gutter) + var(--space-2));
+  bottom: var(--space-2);
+  z-index: var(--z-banner);
+  min-width: 28px;
+  height: 28px;
+  padding: 0 var(--space-1);
+  border: var(--hairline) solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+  opacity: 0.8;
+}
+
+.terminal-hangul-mode.is-korean {
+  border-color: var(--accent);
+  color: var(--accent);
+  opacity: 1;
+}
+
 /* Under the chat lens a prompt card and the held messages can take the stack's whole height (a
    phone with its keyboard up). The transcript's box then reaches zero, and its scroller, which
    keeps its own padding, must not paint over what stands under it. The xterm mount is not

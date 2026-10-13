@@ -988,7 +988,7 @@ export const TR: Record<string, string> = {
   "Reading the plan…": "Plan okunuyor…",
   "Couldn't read the plan. Trying again…": "Plan okunamadı. Tekrar deneniyor…",
   "Only part of this file is shown. Download it to read the rest.": "Bu dosyanın yalnızca bir bölümü gösteriliyor. Gerisini okumak için indirin.",
-  "Search models": "Model ara",
   "Hide the on-screen keyboard": "Ekran klavyesini gizle",
-  "For a tablet used with its hardware keyboard: typing into the terminal raises no on-screen keyboard and no shortcut bar over the pane. Switch the input language in the message box first; the terminal keeps it. Leave this off on a device without a keyboard.": "Donanım klavyesiyle kullanılan bir tablet için: terminale yazarken ekran klavyesi ve panelin üstünde kısayol çubuğu açılmaz. Giriş dilini önce mesaj kutusunda değiştirin; terminal onu korur. Klavyesi olmayan bir cihazda bunu kapalı bırakın.",
+  "For a tablet used with its hardware keyboard: typing into the terminal raises no on-screen keyboard and no shortcut bar over the pane. The system keyboard stays in English there; Caps Lock switches the terminal's own Korean input on and off. Leave this off on a device without a keyboard.": "Donanım klavyesiyle kullanılan bir tablet için: terminale yazarken ekran klavyesi ve panelin üstünde kısayol çubuğu açılmaz. Sistem klavyesi orada İngilizce kalır; Caps Lock terminalin kendi Korece girişini açıp kapatır. Klavyesi olmayan bir cihazda bunu kapalı bırakın.",
+  "Korean input (Caps Lock)": "Korece giriş (Caps Lock)",
 };

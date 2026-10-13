@@ -53,6 +53,7 @@ import { useMediaQuery } from "../lib/useMediaQuery.ts";
 import { modalOpen } from "../lib/focus.ts";
 import { pinchFontSize } from "../lib/pinchFontSize.ts";
 import { narrowPaneFontSize } from "../lib/narrowPaneFont.ts";
+import { HangulComposer, jamoForKey } from "../lib/hangulInput.ts";
 
 /** How long a resize must rest before the grid refits and the pty follows it. */
 const RESIZE_SETTLE_MS = 120;
@@ -327,6 +328,18 @@ export function PaneTerminal({
   const inputLine = !directTyping && !chatView;
   const inputLineRef = useRef(inputLine);
   inputLineRef.current = inputLine;
+  // With the on-screen keyboard hidden (Settings), iPadOS will not switch its input language in the
+  // terminal, so the terminal composes Korean itself: Caps Lock (the iPad's language key) toggles it
+  // with one press, the system layout stays Latin, and the open syllable is typed and rewritten in place.
+  const hangulOn = settings.hideKeyboardBar && !inputLine && !chatView;
+  const hangulOnRef = useRef(hangulOn);
+  hangulOnRef.current = hangulOn;
+  const [hangulMode, setHangulModeState] = useState(false);
+  const hangulModeRef = useRef(false);
+  const setHangulMode = useCallback((korean: boolean) => { hangulModeRef.current = korean; setHangulModeState(korean); }, []);
+  const hangulRef = useRef(new HangulComposer());
+  /** ends the open syllable where it stands (it is in the pane already); a no-op without a terminal */
+  const hangulCommitRef = useRef<() => void>(() => {});
   // input typed while disconnected, held for the user to review and send
   const [draftState, setDraftState] = useState<{ owner: string | null; value: InputDraft }>({ owner: null, value: EMPTY_DRAFT });
   const draft = draftState.value;
@@ -556,8 +569,70 @@ export function PaneTerminal({
     // An app shortcut is the app's alone: xterm would still type it, and Ctrl+Shift+↓ reached the
     // pane it had just switched to as ESC[1;6B.
     let typedChord: string | null = null;
+    // the built-in Korean input (hangulOn) types the open syllable straight into the pane and
+    // rewrites it as it grows (DEL, then the new one), so it shows in the line as it is typed
+    let hangulShown = "";
+    const typeHangul = (done: string): void => {
+      const target = done + hangulRef.current.preedit;
+      const text = hangulShown !== "" && target.startsWith(hangulShown)
+        ? target.slice(hangulShown.length)
+        : "\x7f".repeat(hangulShown.length) + target;
+      hangulShown = hangulRef.current.preedit;
+      if (text) term.input(text);
+    };
+    hangulCommitRef.current = () => {
+      // the open syllable is in the pane already: ending it only stops rewriting it
+      hangulRef.current.flush();
+      hangulShown = "";
+    };
+    const hangulKey = (event: KeyboardEvent): boolean | null => {
+      if (!hangulOnRef.current || term.options.disableStdin) return null;
+      const hangul = hangulRef.current;
+      // iPadOS sends the language key as a keydown only, never its keyup
+      if (event.key === "CapsLock") {
+        if (event.type === "keydown") {
+          event.preventDefault();
+          hangulCommitRef.current();
+          setHangulMode(!hangulModeRef.current);
+        }
+        return false;
+      }
+      const plain = !event.ctrlKey && !event.altKey && !event.metaKey && !hasModifiers(modifiersRef.current) && event.keyCode !== 229;
+      // A letter is read by its position whatever the system layout: the iPad's own language stays
+      // where it was last left (a Korean one reports key "ㅇ" for KeyD, keyCode 68), and the mode
+      // here decides what the key types.
+      const letter = plain && /^Key[A-Z]$/.test(event.code) ? event.code.slice(3) : null;
+      if (letter !== null) {
+        if (event.type === "keydown") {
+          event.preventDefault();
+          if (hangulModeRef.current) typeHangul(hangul.input(jamoForKey(event.code, event.shiftKey)!));
+          else {
+            hangulCommitRef.current();
+            term.input(event.shiftKey ? letter : letter.toLowerCase());
+          }
+        }
+        return false;
+      }
+      if (hangulModeRef.current && plain) {
+        if (event.key === "Backspace" && hangul.preedit !== "") {
+          if (event.type === "keydown") {
+            event.preventDefault();
+            hangul.backspace();
+            typeHangul("");
+          }
+          return false;
+        }
+      }
+      // any other key ends the syllable first, so it lands after it
+      if (event.type === "keydown" && hangul.preedit !== "" && !["Shift", "Control", "Alt", "Meta"].includes(event.key)) hangulCommitRef.current();
+      return null;
+    };
+    const commitHangulOnBlur = (): void => hangulCommitRef.current();
+    term.textarea?.addEventListener("blur", commitHangulOnBlur);
     term.attachCustomKeyEventHandler((event) => {
       if (isAppShortcut(event, shortcutSettings.current)) return false;
+      const hangul = hangulKey(event);
+      if (hangul !== null) return hangul;
       if (hasModifiers(modifiersRef.current) && !term.options.disableStdin && !composingRef.current && !compositionCommitPendingRef.current
           && !event.isComposing && event.keyCode !== 229 && !event.metaKey) {
         const combined = {
@@ -1659,6 +1734,9 @@ export function PaneTerminal({
       onModifiedEnter.dispose();
       onCommandBackspace.dispose();
       host.removeEventListener("keydown", onCommandArrow);
+      term.textarea?.removeEventListener("blur", commitHangulOnBlur);
+      hangulCommitRef.current();
+      hangulCommitRef.current = () => {};
       onData.dispose();
       host.removeEventListener("paste", onPaste, true);
       host.removeEventListener("paste", onFilePaste, { capture: true });
@@ -2050,6 +2128,13 @@ export function PaneTerminal({
     }
   }, [inputLine, coarse, chatView, directTyping, paneId, settings.hideKeyboardBar]);
 
+  // the built-in Korean input ends its open syllable whenever it stops applying: the setting off,
+  // the input line in use, the chat lens over the grid, another pane
+  useEffect(() => {
+    if (!hangulOn) hangulCommitRef.current();
+  }, [hangulOn]);
+  useEffect(() => () => hangulCommitRef.current(), [paneId]);
+
   // the composer's stop button: Escape interrupts the agent's current turn in every
   // supported TUI (Claude Code, omp, codex) without killing the process the way ^C would
   const abortTurn = useCallback(() => {
@@ -2359,6 +2444,14 @@ export function PaneTerminal({
             stop on the wrapper would only be an empty one ahead of it. */}
         <div className={`pane-terminal${paneId === null ? " is-idle" : ""}${!chatView && paneId !== null ? " has-viewport-tools" : ""}`} ref={hostRef} id={viewportId} data-mouse-reporting={mouseReporting && !observing && !held && !secretActive && connected && !chatView ? "" : undefined} role={chatView ? undefined : "region"} aria-roledescription={chatView ? undefined : t("Terminal")} aria-label={chatView ? undefined : terminalName} />
         <span className="terminal-font-size" ref={pinchBadgeRef} hidden aria-hidden="true" />
+        {hangulOn && paneId !== null && (
+          <button type="button" className={`terminal-hangul-mode${hangulMode ? " is-korean" : ""}`}
+            aria-pressed={hangulMode} title={t("Korean input (Caps Lock)")} aria-label={t("Korean input (Caps Lock)")}
+            onPointerDown={(event) => event.preventDefault()}
+            onClick={() => { hangulCommitRef.current(); setHangulMode(!hangulModeRef.current); }}>
+            {hangulMode ? "한" : "A"}
+          </button>
+        )}
         {paneId !== null && <TerminalViewportTools key={paneId} viewportIntent={viewportIntent} terminal={terminal} paneId={paneId} viewportId={viewportId}
           pageScroll={chatView ? undefined : pageScroll}
           onApplicationPage={sendApplicationPage}

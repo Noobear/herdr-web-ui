@@ -295,7 +295,7 @@ function TerminalPage({ keyBarButtonRef, onEditKeyBar }: { keyBarButtonRef: RefO
       <SettingsRow label={t("Fit 80 columns in a split pane")} description={t("A split pane narrower than 80 columns draws in a smaller font, down to 10px, so a program that needs 80 columns still fits. Turn it off to keep your font size in every pane.")}>
         <Toggle label={t("Fit 80 columns in a split pane")} checked={settings.narrowPaneFont} onChange={(narrowPaneFont) => update({ narrowPaneFont })} />
       </SettingsRow>
-      <SettingsRow label={t("Hide the on-screen keyboard")} description={t("For a tablet used with its hardware keyboard: typing into the terminal raises no on-screen keyboard and no shortcut bar over the pane. Switch the input language in the message box first; the terminal keeps it. Leave this off on a device without a keyboard.")}>
+      <SettingsRow label={t("Hide the on-screen keyboard")} description={t("For a tablet used with its hardware keyboard: typing into the terminal raises no on-screen keyboard and no shortcut bar over the pane. The system keyboard stays in English there; Caps Lock switches the terminal's own Korean input on and off. Leave this off on a device without a keyboard.")}>
         <Toggle label={t("Hide the on-screen keyboard")} checked={settings.hideKeyboardBar} onChange={(hideKeyboardBar) => update({ hideKeyboardBar })} />
       </SettingsRow>
       <SettingsRow label={t("Terminal font")} description={t("Comma-separated, tried in order. A font this device does not have falls back to the default.")} wide>
