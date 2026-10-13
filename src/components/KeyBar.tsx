@@ -187,8 +187,9 @@ export function KeyBar({ onKey, modifiers, onToggleModifier, items, directTyping
       bar.classList.toggle("is-at-screen-bottom", bar.getBoundingClientRect().bottom >= window.innerHeight - 1);
     };
     place();
+    // the pane's own frame and what holds it change size on a split or zoom with the page unchanged
     const observer = new ResizeObserver(place);
-    observer.observe(document.documentElement);
+    for (let node: HTMLElement | null = bar.parentElement; node; node = node.parentElement) observer.observe(node);
     window.addEventListener("resize", place);
     return () => { observer.disconnect(); window.removeEventListener("resize", place); };
   }, []);
