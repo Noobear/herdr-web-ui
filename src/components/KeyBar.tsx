@@ -22,6 +22,9 @@ export interface KeyBarProps {
   /** on a touch screen: whether the keyboard types straight into the terminal (else the input line) */
   directTyping?: boolean;
   onToggleDirect?: () => void;
+  /** with the on-screen keyboard hidden: whether the terminal's own Korean input is on (Caps Lock toggles it too) */
+  korean?: boolean;
+  onToggleKorean?: () => void;
 }
 
 /**
@@ -173,7 +176,7 @@ export const EXTRA_KEY_CAPS: Partial<Record<KeyBarExtra, { cap: string; label?: 
  * for touch, a hardware keyboard already has all of them. Hence role="group", not
  * toolbar: a toolbar promises arrow-key navigation between items, which these skip.
  */
-export function KeyBar({ onKey, modifiers, onToggleModifier, items, directTyping, onToggleDirect, disabled, holdScope }: KeyBarProps) {
+export function KeyBar({ onKey, modifiers, onToggleModifier, items, directTyping, onToggleDirect, korean, onToggleKorean, disabled, holdScope }: KeyBarProps) {
   const t = useT();
   return (
     <div className="key-bar" role="group" aria-label={t("Terminal keys")}>
@@ -181,6 +184,11 @@ export function KeyBar({ onKey, modifiers, onToggleModifier, items, directTyping
       {onToggleDirect && (
         <Key disabled={disabled} dataKey="direct" label={t("Type straight into the terminal")} pressed={directTyping} onPress={onToggleDirect}>
           <Keyboard aria-hidden="true" />
+        </Key>
+      )}
+      {onToggleKorean && (
+        <Key disabled={disabled} dataKey="korean" label={t("Korean input (Caps Lock)")} pressed={korean} onPress={onToggleKorean}>
+          {korean ? "한" : "En"}
         </Key>
       )}
       {items.map((item) => {

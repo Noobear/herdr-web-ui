@@ -340,6 +340,7 @@ export function PaneTerminal({
   const hangulRef = useRef(new HangulComposer());
   /** ends the open syllable where it stands (it is in the pane already); a no-op without a terminal */
   const hangulCommitRef = useRef<() => void>(() => {});
+  const toggleKorean = useCallback(() => { hangulCommitRef.current(); setHangulMode(!hangulModeRef.current); }, [setHangulMode]);
   // input typed while disconnected, held for the user to review and send
   const [draftState, setDraftState] = useState<{ owner: string | null; value: InputDraft }>({ owner: null, value: EMPTY_DRAFT });
   const draft = draftState.value;
@@ -2444,14 +2445,6 @@ export function PaneTerminal({
             stop on the wrapper would only be an empty one ahead of it. */}
         <div className={`pane-terminal${paneId === null ? " is-idle" : ""}${!chatView && paneId !== null ? " has-viewport-tools" : ""}`} ref={hostRef} id={viewportId} data-mouse-reporting={mouseReporting && !observing && !held && !secretActive && connected && !chatView ? "" : undefined} role={chatView ? undefined : "region"} aria-roledescription={chatView ? undefined : t("Terminal")} aria-label={chatView ? undefined : terminalName} />
         <span className="terminal-font-size" ref={pinchBadgeRef} hidden aria-hidden="true" />
-        {hangulOn && paneId !== null && (
-          <button type="button" className={`terminal-hangul-mode${hangulMode ? " is-korean" : ""}`}
-            aria-pressed={hangulMode} title={t("Korean input (Caps Lock)")} aria-label={t("Korean input (Caps Lock)")}
-            onPointerDown={(event) => event.preventDefault()}
-            onClick={() => { hangulCommitRef.current(); setHangulMode(!hangulModeRef.current); }}>
-            {hangulMode ? "한" : "A"}
-          </button>
-        )}
         {paneId !== null && <TerminalViewportTools key={paneId} viewportIntent={viewportIntent} terminal={terminal} paneId={paneId} viewportId={viewportId}
           pageScroll={chatView ? undefined : pageScroll}
           onApplicationPage={sendApplicationPage}
@@ -2623,7 +2616,8 @@ export function PaneTerminal({
       {presented && paneId !== null && !secretActive && !observing && !chatView && <KeyBar disabled={composing || !connected || !inputReady || held || ended} onKey={pressKey}
         holdScope={`${paneStorageId(machineId, paneId)}:${view}`}
         modifiers={modifiers} onToggleModifier={toggleModifier} items={settings.keyBarItems}
-        {...(coarse ? { directTyping, onToggleDirect: toggleDirect } : {})} />}
+        {...(coarse ? { directTyping, onToggleDirect: toggleDirect } : {})}
+        {...(hangulOn ? { korean: hangulMode, onToggleKorean: toggleKorean } : {})} />}
     </div>
   );
 }

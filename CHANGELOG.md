@@ -11,8 +11,8 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 - **Settings → Terminal → Hide the on-screen keyboard**, for a tablet typed on with its hardware
   keyboard: typing into the terminal raises no on-screen keyboard and no shortcut bar over the
   panes. iPadOS will not switch its input language in that field, so the terminal composes 2-set
-  Korean itself: Caps Lock (the iPad's language key) toggles it with one press, a badge at the
-  bottom right shows and toggles the mode, and the syllable being built is typed into the line and
+  Korean itself: Caps Lock (the iPad's language key) toggles it with one press, a 한/En key in the
+  key bar shows and toggles the mode, and the syllable being built is typed into the line and
   rewritten as it grows.
 - **Settings → Phone & devices → Portal** gives this PC a public HTTPS address through
   [Portal](https://github.com/gosuda/portal-tunnel), with no account and no domain of your own.
