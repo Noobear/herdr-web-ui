@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { PtySession } from "./session.ts";
+import { PtySession, writeLine } from "./session.ts";
 
 /**
  * The attach command is `herdr terminal attach`, and herdr's CLI picks its socket from
@@ -115,4 +115,18 @@ describe("PtySession", () => {
       expect(Bun.spawnSync(["pgrep", "-f", tag]).stdout.length).toBe(0);
     } finally { session.kill(); }
   }, 12000);
+});
+
+describe("writeLine", () => {
+  it("survives a child that already closed its stdin", async () => {
+    // on Windows the write settles later and an EPIPE rejects the returned promise instead of throwing
+    const rejections: unknown[] = []; const track = (error: unknown) => rejections.push(error);
+    process.on("unhandledRejection", track);
+    const proc = Bun.spawn([process.platform === "win32" ? "python" : "python3", "-c", "import os,time; os.close(0); time.sleep(3)"], { stdin: "pipe" });
+    try {
+      await Bun.sleep(800);
+      writeLine(proc.stdin, "{}\n"); await Bun.sleep(300);
+      expect(rejections).toEqual([]);
+    } finally { process.off("unhandledRejection", track); proc.kill(); }
+  });
 });
