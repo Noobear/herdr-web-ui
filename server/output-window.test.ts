@@ -71,6 +71,19 @@ describe("terminal output credit", () => {
     expect(replay.text()).toBe("\x1b[?1049h" + "\x1b[>4;2m" + "w".repeat(10));
   });
 
+  it("says when the tail lost the stream's start, and the modes the whole stream leaves", () => {
+    const replay = new ReplayBuffer(16);
+    replay.append("\x1b[?1049h\x1b[>4;2mwhole");
+    expect(replay.whole).toBe(true);
+    expect(replay.state()).toBe("\x1b[?1049h\x1b[>4;2m");
+    replay.append("\x1b[?1000h" + "x".repeat(40));
+    expect(replay.whole).toBe(false);
+    // modes from the cut and from the tail, each at its last switch
+    expect(replay.state()).toBe("\x1b[?1049h\x1b[?1000h\x1b[>4;2m");
+    replay.append("\x1b[?1049l\x1b[>4;0m");
+    expect(replay.state()).toBe("\x1b[?1000h\x1b[?1049l");
+  });
+
   it("replays a short stream as it is, and nothing before any output", () => {
     const replay = new ReplayBuffer(1024);
     expect(replay.text()).toBe("");

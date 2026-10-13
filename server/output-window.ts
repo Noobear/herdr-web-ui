@@ -55,8 +55,37 @@ export class ReplayBuffer {
   private readonly modes = new Map<string, "h" | "l">();
   /** the modifyOtherKeys level the output before the tail left, 0 when off */
   private modifyOtherKeys = 0;
+  /** output has fallen out of the tail since the buffer began */
+  private dropped = false;
 
   constructor(private readonly limit: number) {}
+
+  /**
+   * Whether the tail still holds the stream from its start, so that replaying it redraws the
+   * whole screen. herdr's terminal stream draws the screen whole once and then only the cells
+   * that change: once that first frame falls out, a joiner replaying the tail gets a screen
+   * missing every row nothing has rewritten since (a prompt, a status line under a spinner).
+   */
+  get whole(): boolean {
+    return !this.dropped;
+  }
+
+  /**
+   * The private modes and modifyOtherKeys level the whole stream leaves, as switches: what a
+   * joiner drawn from a screen read instead of the tail must be told first.
+   */
+  state(): string {
+    const modes = new Map(this.modes);
+    let keys = this.modifyOtherKeys;
+    for (const [, params, state] of this.tail.matchAll(PRIVATE_MODES)) {
+      for (const mode of params!.split(";").filter(Boolean)) {
+        modes.delete(mode);
+        modes.set(mode, state as "h" | "l");
+      }
+    }
+    for (const [, resource, level, final] of this.tail.matchAll(MODIFY_OTHER_KEYS)) keys = resource && final === "m" ? Number(level || 0) : 0;
+    return [...modes].map(([mode, state]) => `\x1b[?${mode}${state}`).join("") + (keys > 0 ? `\x1b[>4;${keys}m` : "");
+  }
 
   /** Keeps a bounded UTF-8 tail, never starting in the middle of a code point. */
   append(data: string): void {
@@ -70,6 +99,7 @@ export class ReplayBuffer {
       this.tail += data;
       return;
     }
+    this.dropped = true;
     const cut = bytes.subarray(0, start).toString("utf8");
     for (const [, params, state] of cut.matchAll(PRIVATE_MODES)) {
       for (const mode of params!.split(";").filter(Boolean)) {

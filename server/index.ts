@@ -92,7 +92,7 @@ import { PtySession } from "./pty/session.ts";
 import { PaneWatch } from "./watch.ts";
 import { AttachOutputTail, isTakeoverExit } from "./attach-output.ts";
 import { attachableIdentity, sidecarAvailable } from "./pty/sidecar.ts";
-import { MirrorSession } from "./mirror.ts";
+import { MirrorSession, mirrorFrame } from "./mirror.ts";
 import { mirrorInput } from "./mirror-input.ts";
 import { PendingInputs, PendingInputError, type PendingIdentity, type PendingRecord } from "./pending-input.ts";
 import { PendingRequestBook } from "./pending-requests.ts";
@@ -364,6 +364,8 @@ interface PaneAttachment {
   rows: number;
   /** bounded tail so a client joining late still sees the current screen */
   replay: ReplayBuffer;
+  /** joiners drawn from a screen read (joinFromScreen): the stream that comes meanwhile is held for each, in order */
+  joining?: Map<Client, string[]>;
   stalled: Map<Client, number>;
   /** another web bridge holds herdr's one attach slot for this terminal: waiting for it to let go */
   held?: boolean;
@@ -1218,7 +1220,11 @@ export function createServer(
     const forward = (data: string): void => {
       if (attachments.get(paneId) !== attachment) return;
       attachment.replay.append(data);
-      for (const client of attachment.clients) sendOutput(client, paneId, data);
+      for (const client of attachment.clients) {
+        const held = attachment.joining?.get(client);
+        if (held) held.push(data);
+        else sendOutput(client, paneId, data);
+      }
       reconcileOutput(paneId);
     };
     let retries = 0;
@@ -1475,8 +1481,35 @@ export function createServer(
     if (!attachment) return;
     attachment.clients.delete(client);
     attachment.stalled.delete(client);
+    attachment.joining?.delete(client);
     if (attachment.clients.size === 0) closeAttachment(paneId);
     else reconcileOutput(paneId);
+  }
+
+  /**
+   * A joiner of a terminal stream whose replay lost the whole frame it began with
+   * (ReplayBuffer.whole): herdr draws a screen whole once and then only the cells that change,
+   * so the tail alone left every row nothing had rewritten since blank (the prompt and status
+   * line under a working agent's spinner), and no later frame brought them back. The joiner
+   * gets herdr's own screen instead, then everything the stream sent meanwhile, in order: those
+   * frames write cells in place, so one the read already shows draws the same again.
+   */
+  function joinFromScreen(client: Client, paneId: string, attachment: PaneAttachment): void {
+    const held: string[] = [];
+    (attachment.joining ??= new Map()).set(client, held);
+    const state = attachment.replay.state();
+    const tail = attachment.replay.text();
+    void paneRead({ paneId, source: "visible", format: "ansi" }).then(
+      (read) => state + mirrorFrame(read.text, attachment.rows),
+      // no screen to read: the tail is still better than nothing
+      () => tail,
+    ).then((screen) => {
+      if (attachment.joining?.get(client) !== held) return;
+      attachment.joining.delete(client);
+      if (attachments.get(paneId) !== attachment || !attachment.clients.has(client)) return;
+      sendOutput(client, paneId, screen + held.join(""));
+      reconcileOutput(paneId);
+    });
   }
 
   /**
@@ -2760,8 +2793,11 @@ export function createServer(
               if (attachment.mirror) send(client, { type: "pane-geometry", pane_id: message.pane_id, cols: attachment.cols, rows: attachment.rows, fixed: true });
               // hand the newcomer the current screen it would otherwise have missed
               // (a mirror keeps its latest screen whole; a pty keeps a bounded tail of its stream)
-              const replay = attachment.mirror ? attachment.mirror.current ?? "" : attachment.replay.text();
-              if (!alreadyAttached && replay) sendOutput(client, message.pane_id, replay);
+              if (!alreadyAttached && !attachment.mirror && !attachment.replay.whole) joinFromScreen(client, message.pane_id, attachment);
+              else {
+                const replay = attachment.mirror ? attachment.mirror.current ?? "" : attachment.replay.text();
+                if (!alreadyAttached && replay) sendOutput(client, message.pane_id, replay);
+              }
               // a pane waiting for another web bridge to let go says so to each newcomer, too
               if (!alreadyAttached && attachment.held) send(client, { type: "error", code: "attach_held", message: ATTACH_HELD_MESSAGE, pane_id: message.pane_id });
               reconcileOutput(message.pane_id);
