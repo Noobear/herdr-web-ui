@@ -77,6 +77,9 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   ([#860](https://github.com/devswha/herdr-web-ui/pull/860))
 
 ### Fixed
+- The terminal's key bar no longer sits against the pane's left edge, and on an iPad or phone only
+  the bar at the bottom of the screen keeps room for the home indicator: a pane stacked over
+  another one no longer has empty space under its keys.
 - First-device pairing waits for the browser to return its device cookie before restricting
   access. A proxy that drops the cookie no longer locks out an otherwise open installation;
   Settings reports the failed pairing instead. Already restricted installations stay restricted.
