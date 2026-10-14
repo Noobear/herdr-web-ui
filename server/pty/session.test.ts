@@ -126,11 +126,30 @@ describe("writeLine", () => {
     const rejections: unknown[] = []; const track = (error: unknown) => rejections.push(error);
     process.on("unhandledRejection", track);
     let proc: ReturnType<typeof Bun.spawn> | undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      proc = Bun.spawn([python!, "-c", "import os,time; os.close(0); time.sleep(3)"], { stdin: "pipe" });
-      await Bun.sleep(800);
-      writeLine(proc.stdin as import("bun").FileSink, "{}\n"); await Bun.sleep(300);
+      const child = Bun.spawn([
+        python!, "-c",
+        "import os,threading; os.close(0); os.write(1,b'closed\\n'); os.close(1); threading.Event().wait()",
+      ], { stdin: "pipe", stdout: "pipe", stderr: "inherit" });
+      proc = child;
+      const ready = await Promise.race([
+        new Response(child.stdout).text(),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error("Child did not close stdin within 2 seconds")), 2000);
+        }),
+      ]);
+      clearTimeout(timer);
+      expect(ready).toBe("closed\n");
+      expect(child.exitCode).toBeNull();
+      writeLine(child.stdin, "{}\n");
+      await Bun.sleep(300); // fixed wait: observe delayed unhandled rejections after the pipe write
       expect(rejections).toEqual([]);
-    } finally { process.off("unhandledRejection", track); proc?.kill(); }
+    } finally {
+      clearTimeout(timer);
+      proc?.kill();
+      await proc?.exited;
+      process.off("unhandledRejection", track);
+    }
   });
 });
