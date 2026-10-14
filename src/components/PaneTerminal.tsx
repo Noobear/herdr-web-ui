@@ -21,6 +21,7 @@ import { heldCountShown, heldOpenAtFold, heldOpenOnFocus, heldRefocusDue, heldRo
 import { arrangeNotices, dismissNotice, NO_DISMISSALS, settleDismissed, type DismissedNotices } from "../lib/composerNotices.ts";
 import { type DraftRefusal, MAX_COMPOSER_CHARS, QUEUE_READY_STATUS, agentDisplayLabel, composerDelivery, composerMessage, composerPayload, submitNote, submitNotTyped, submitRefusal } from "../lib/compose.ts";
 import { afterRead, afterSend, afterSettled, composerLift, greetingMemory, rememberGreeting, greetingFits, greetingFolder, roomOverComposer, showsGreeting, type ChatRead } from "../lib/greeting.ts";
+import { DETACHED, usePaneBranch } from "../lib/paneBranch.ts";
 import { answerFromText, answerHint, answerRefusal, needsConfirmation, type TypedAnswer } from "../lib/promptAnswer.ts";
 import { ApiError, assertAttachable, fetchPaneScroll, fetchPaneSelection, scrollPane } from "../lib/api.ts";
 import { parseOsc52 } from "../lib/osc52.ts";
@@ -93,6 +94,10 @@ export interface PaneTerminalProps {
   backgroundWait?: boolean;
   /** the pane's working directory and its PC's name: an empty chat's greeting names them */
   cwd?: string | null;
+  /** the pane's workspace: its checkout's branch stands beside the folder under the composer */
+  workspaceId?: string | null;
+  /** that workspace is a linked worktree of its repository */
+  linkedWorktree?: boolean;
   machineName?: string;
   /** the lens over the pane: the chat transcript, or the live xterm grid (App remembers it per pane) */
   view: PaneView;
@@ -149,6 +154,8 @@ export function PaneTerminal({
   plan = null,
   backgroundWait = false,
   cwd = null,
+  workspaceId = null,
+  linkedWorktree = false,
   machineName = "",
   view,
   findRequest = 0,
@@ -176,6 +183,7 @@ export function PaneTerminal({
   const openFileRef = useRef(openFile);
   openFileRef.current = openFile;
   const machineId = useMachineId();
+  const branchWord = usePaneBranch(machineId, workspaceId);
   const machineSessions = useMachineSessions();
   const sessionRef = useRef<MachineSession | null>(null);
   const submitRetention = useContext(PaneSubmitContext);
@@ -455,6 +463,22 @@ export function PaneTerminal({
   const queueOwner = paneId === null ? null : paneStorageId(machineId, paneId);
   const queued = useSyncExternalStore(queueStore.subscribe, () => queueStore.read(queueOwner ?? ""));
   const pending = useSyncExternalStore(pendingMessages.subscribe, () => pendingMessages.read(queueOwner ?? ""));
+  useEffect(() => {
+    if (!paneId || !queueOwner || !submitRetention) return;
+    let release: (() => void) | undefined;
+    const retainPending = (): void => {
+      const scope = sessionRef.current?.scope ?? null;
+      const waits = pendingMessages.read(queueOwner).some((message) => pendingMessages.isOwned(queueOwner, message.id, scope)
+        && (message.state === "queued" || message.state === "sending"));
+      if (waits) release ??= submitRetention.retain(paneId);
+      else { release?.(); release = undefined; }
+    };
+    // Transfer retention before the submit promise releases its receipt claim. A React
+    // render/effect after that release would let navigation unmount the pane in between.
+    const off = pendingMessages.subscribe(retainPending);
+    retainPending();
+    return () => { off(); release?.(); };
+  }, [paneId, queueOwner, submitRetention]);
   const sendingRef = useRef(false);
   const [queueSending, setQueueSending] = useState<string | null>(null);
   // a refused Send now's note outlives this mount: a pane left for another workspace unmounts, and
@@ -1134,6 +1158,15 @@ export function PaneTerminal({
           setConnected(socket.connected);
           return;
         }
+        if (message.code === "attach_failed") {
+          if (message.pane_id !== undefined && message.pane_id !== paneRef.current) return;
+          // the server could not start herdr: nothing is coming, so say why instead of waiting
+          setOutputError(t("herdr could not be started on the server, so this terminal cannot attach. Put herdr on the server's PATH or set HERDR_WEB_HERDR_BIN to its full path."));
+          setEnded(true);
+          term.options.disableStdin = true;
+          setConnected(socket.connected);
+          return;
+        }
         if (message.code === "terminal_unsupported") {
           if (message.pane_id !== undefined && message.pane_id !== paneRef.current) return;
           setUnsupported(true);
@@ -1178,7 +1211,12 @@ export function PaneTerminal({
     });
     session.connect();
 
-    const poll = window.setInterval(() => { setConnected(socket.connected); setConversationPushes(socket.conversationPushes()); }, 1000);
+    // input readiness too: a liveness probe refuses input without a frame to say so
+    const poll = window.setInterval(() => {
+      setConnected(socket.connected);
+      setConversationPushes(socket.conversationPushes());
+      if (paneRef.current) setInputReady(socket.canInput(paneRef.current));
+    }, 1000);
 
     // onKey runs after xterm drains a pending IME commit, immediately before the
     // key's onData. Remap only that CR, preserving composition text and its order.
@@ -2062,6 +2100,8 @@ export function PaneTerminal({
     const session = sessionRef.current;
     const pane = paneRef.current;
     if (!term || !socket || !session || pane === null || secretRef.current !== null || heldRef.current) return null;
+    // its Enter would run the pty's line without the start a held draft keeps
+    if (draftHeldForRef.current === pane) return Promise.resolve({ ok: false, code: "held_input", message: "send or discard the held input first" });
     // not the scope itself: a message sent right after a reconnect leaves before the snapshot that names it
     const epoch = session.epoch;
     const sent = socket.submit(pane, composerMessage(text), composerPayload(text, term.modes.bracketedPasteMode), false, delivery, clearDraft);
@@ -2350,6 +2390,13 @@ export function PaneTerminal({
     if (!message || message.state === "sending") return;
     if (action === "steer" && (message.state === "uncertain" || !socket?.connected || heldRef.current || secretRef.current !== null || observeRef.current || ended || heldByOpenQueue || answering !== null)) return;
     if (message.serverOwned && !pendingMessages.isOwned(owner, id, scope)) return;
+    // keys held back in the terminal draft would run in front of the message: the server pastes a
+    // server-owned row's text and sends Enter without looking for a partial line (only Claude's box
+    // is checked there). The row stays as it is, so Send now after the draft is settled, or Discard, still works.
+    if (action === "steer" && draftHeldForRef.current === pane) {
+      pendingMessages.fail(owner, id, { code: "held_input", message: "send or discard the held input first" }, false);
+      return;
+    }
     if (!pendingMessages.begin(owner, id)) return;
     try {
       if (message.serverOwned) {
@@ -2709,6 +2756,8 @@ export function PaneTerminal({
           key={paneId}
           paneId={paneId}
           cwd={cwd}
+          branch={branchWord === DETACHED ? t("Detached HEAD") : branchWord}
+          worktree={linkedWorktree}
           autoFocus={active && !autoSelected && !coarse}
           active={active}
           agent={agent}

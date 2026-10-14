@@ -34,6 +34,7 @@ import { SessionPlans } from "./session-plan.ts";
 import { codexOpenRollout, paneCodexHome } from "./codex.ts";
 import { CompletionTracker, type OmoRest } from "./completion.ts";
 import { freeAgentName } from "./agent-name.ts";
+import { launchedAgents } from "./launched-agents.ts";
 import { SHELL_AGENTS, isShellAgentKind, shellAgentExecutable, startShellAgent } from "./shell-agent.ts";
 import { listDirectories } from "./directories.ts";
 import { fileResponse, locateFile, crossSiteFileRead } from "./file-view.ts";
@@ -108,6 +109,7 @@ import { handleUsageRequest, UsageService } from "./usage.ts";
 import { handleVoiceRequest, VoiceService } from "./voice.ts";
 
 import { BRIDGE_PROTOCOL } from "../shared/machines.ts";
+import { MAX_LABEL_CHARS } from "../shared/labels.ts";
 import { bridgeIdentity, registerBridge } from "./bridge.ts";
 import { bridgeAgentNews, MachineManager } from "./machines.ts";
 import { handleMachineRequest } from "./machine-api.ts";
@@ -142,13 +144,14 @@ const ATTACH_RETRY_MAX_MS = 500;
 /** a refused attach says so within milliseconds of its first bytes: those are held this long */
 const ATTACH_HOLD_MS = 100;
 /**
- * What `herdr terminal attach` writes itself before herdr has answered: terminal modes set and
- * reset only (mouse reporting off, the alternate screen on; the last one maybe cut short). The
- * answer can come any time after them, later than the hold on a busy PC, so they say nothing
- * about whether the attach took and do not start the hold. A refusal and a screen both begin
- * with something else.
+ * What `herdr terminal attach` writes itself before herdr has answered, and as the teardown of a
+ * refused one: terminal modes set and reset (mouse reporting off, the alternate screen on, then
+ * off) and the cursor style restored (`ESC [ 0 SP q`), the last one maybe cut short. The answer
+ * can come any time after them, later than the hold on a busy PC, and herdr writes its refusal
+ * apart from the teardown before it, so they say nothing about whether the attach took and do
+ * not start the hold. A refusal and a screen both begin with something else.
  */
-const ATTACH_PREAMBLE_RE = /^(?:\x1b\[\?[\d;]+[hl])*(?:\x1b(?:\[(?:\?[\d;]*)?)?)?$/;
+const ATTACH_PREAMBLE_RE = /^(?:\x1b\[(?:\?[\d;]+[hl]|\d* q))*(?:\x1b(?:\[(?:\?[\d;]*|\d+ ?| )?)?)?$/;
 /** how often a terminal another web bridge holds is tried again, while clients here still want it */
 const ATTACH_HELD_RETRY_MS = 3_000;
 /**
@@ -303,6 +306,7 @@ async function agentLaunch(paneId: string, agent: AgentPayload): Promise<{ agent
         }
       }
     }
+    launchedAgents.launched(paneId, kind);
     return { agent_started: true };
   } catch (error) {
     return {
@@ -1059,6 +1063,8 @@ export function createServer(
     // not waited for: finding a transcript costs process calls, and a snapshot must not wait on them.
     // The plans come after: a Claude pane's transcript is the one the subagent tracker found
     void claudeAgents.refresh(named.panes).catch(() => undefined).then(() => plans.refresh(named.panes)).catch(() => undefined);
+    // an agent this server started has had no turn yet: its start screen is no work (launched-agents.ts)
+    for (const pane of named.panes) pane.agent_status = launchedAgents.settle(pane.pane_id, pane.agent_status);
     return named;
   };
   const backgroundOf = (paneId: string): number => omo.backgroundOf(paneId) || claudeAgents.countOf(paneId);
@@ -1254,7 +1260,7 @@ export function createServer(
         attachment.pty = start();
       } catch (error) {
         const message = spawnFailure(paneId, error);
-        broadcast(paneId, { type: "error", code: "command_failed", message });
+        broadcast(paneId, { type: "error", code: error instanceof HerdrError ? error.code : "command_failed", message, pane_id: paneId });
         broadcast(paneId, { type: "pty-exit", pane_id: paneId, code: null });
         closeAttachment(paneId);
       }
@@ -1408,7 +1414,7 @@ export function createServer(
               attachment.pty = start();
             } catch (error) {
               const message = spawnFailure(paneId, error);
-              broadcast(paneId, { type: "error", code: "command_failed", message });
+              broadcast(paneId, { type: "error", code: error instanceof HerdrError ? error.code : "command_failed", message, pane_id: paneId });
               finish();
             }
           }, (error: unknown) => {
@@ -1420,8 +1426,14 @@ export function createServer(
         };
         relookup();
       };
+      const command = process.env["HERDR_WEB_HERDR_BIN"] || "herdr";
+      // node-pty reports a command it cannot exec only as a silent exit 1, which reads as an
+      // ended attach (#925): look it up on the PATH and from the home directory the sidecar uses.
+      if (!Bun.which(command, { PATH: process.env["PATH"] ?? "", cwd: process.env["HOME"] ?? "/" })) {
+        throw new HerdrError("attach_failed", `herdr could not be started: ${command} is not an executable on the server's PATH (set HERDR_WEB_HERDR_BIN to herdr's full path)`);
+      }
       const session = new PtySession({
-        command: process.env["HERDR_WEB_HERDR_BIN"] || "herdr",
+        command,
         // --takeover goes after the id: before it, herdr reads the id as an unknown option
         args: ["terminal", "attach", attachedTerminal, ...(takingOver ? ["--takeover"] : [])],
         // herdr's CLI reads HERDR_SOCKET_PATH, not HERDR_SOCKET: the stream must reach
@@ -1554,7 +1566,8 @@ export function createServer(
   const bridgeAgents = machines ? null : bridgeAgentNews(() => broadcastAll({ type: "session-changed" }));
 
   const collector = startStatusCollector({
-    onStatus: (paneId, raw, agent, replay) => {
+    onStatus: (paneId, read, agent, replay) => {
+      const raw = launchedAgents.settle(paneId, read);
       // read back from a snapshot around a gap between subscriptions. An OmO pane's status there
       // is OmO's own or herdr's by turns (server/omo-status.ts), and a difference is no change
       if (replay && (omo.runs(paneId) || !completions.replayed(paneId, raw, replay))) return;
@@ -1859,7 +1872,8 @@ export function createServer(
           // not herdr kinds: offered where this server can run them (see shell-agent.ts)
           for (const kind of Object.keys(SHELL_AGENTS)) if (shellAgentExecutable(kind)) kinds.add(kind);
           const agents: AgentKind[] = [...kinds]
-            .map((kind) => ({ kind, label: AGENT_LABELS[kind] ?? kind }))
+            // an agent's command is its kind; the pane's shell may carry another PATH, as for omo and gjc above
+            .map((kind) => ({ kind, label: AGENT_LABELS[kind] ?? kind, installed: Bun.which(kind, { PATH: process.env["PATH"] ?? "" }) !== null }))
             .sort((left, right) => left.label.localeCompare(right.label) || left.kind.localeCompare(right.kind));
           return jsonResponse({ agents });
         } catch (error) {
@@ -1955,6 +1969,13 @@ export function createServer(
         const cwd = payload.cwd === undefined ? undefined : expandedDirectory(payload.cwd);
         if (payload.cwd !== undefined && cwd === null) return badRequest("invalid_cwd", "cwd must be an existing directory");
         if (payload.label !== undefined && typeof payload.label !== "string") return badRequest("missing_label", "label must be a string");
+        if (typeof payload.label === "string") {
+          // a blank name is no name: herdr names the workspace after its folder, the tab by its number
+          const label = payload.label.trim();
+          if (label.length > MAX_LABEL_CHARS) return badRequest("label_too_long", `label must be at most ${MAX_LABEL_CHARS} characters`);
+          if (label === "") delete payload.label;
+          else payload.label = label;
+        }
         const fault = agentFault(payload.agent);
         if (fault !== null) return badRequest("invalid_agent", fault);
         // agent.start can legitimately take a minute; Bun's default idle timeout is shorter.
@@ -2008,6 +2029,8 @@ export function createServer(
         bunServer.timeout(request, 75);
         try {
           const removed = await worktreeRemove(payload.workspace_id, payload.force === true);
+          // herdr closed the worktree's workspace: tell clients now, as the workspace close route does
+          broadcastAll({ type: "session-changed" });
           return jsonResponse({ ok: true, path: removed.path, forced: removed.forced });
         } catch (error) {
           return errorResponse(error);
@@ -2039,6 +2062,7 @@ export function createServer(
         } catch (response) {
           return response as Response;
         }
+        if (label !== undefined && label.length > MAX_LABEL_CHARS) return badRequest("label_too_long", `label must be at most ${MAX_LABEL_CHARS} characters`);
         // a checkout path is taken as git names it, spaces and all
         let path: string | undefined;
         if (payload.path !== undefined && payload.path !== null) {
@@ -2079,6 +2103,11 @@ export function createServer(
             ...(agent ? await agentLaunch(opened.root_pane.pane_id, agent) : {}),
           });
         } catch (error) {
+          // git's own words for a branch that has no commit yet (a folder just `git init`ed): with no
+          // base named there is nothing to check out from, which the dialog says in its own words
+          if (creating && base === undefined && error instanceof HerdrError && error.code === "worktree_create_failed" && /invalid reference: HEAD\b/u.test(error.message)) {
+            return conflictResponse("repository_without_commits", "the repository has no commits yet");
+          }
           return errorResponse(error);
         }
       }
@@ -2098,8 +2127,12 @@ export function createServer(
         if (pathname === "/api/workspace/close" && payload.close_group !== undefined && typeof payload.close_group !== "boolean") {
           return badRequest("invalid_close_group", "close_group must be a boolean");
         }
-        if (pathname === "/api/workspace/rename" && typeof payload.label !== "string") {
-          return badRequest("missing_label", "label is required");
+        if (pathname === "/api/workspace/rename") {
+          // herdr would keep an empty label, and the sidebar row would show no name
+          const label = typeof payload.label === "string" ? payload.label.trim() : "";
+          if (label === "") return badRequest("missing_label", "label is required");
+          if (label.length > MAX_LABEL_CHARS) return badRequest("label_too_long", `label must be at most ${MAX_LABEL_CHARS} characters`);
+          payload.label = label;
         }
         if (pathname === "/api/workspace/move" && (typeof payload.insert_index !== "number" || !Number.isInteger(payload.insert_index) || payload.insert_index < 0)) {
           return badRequest("invalid_index", "insert_index must be a non-negative integer");
@@ -2108,6 +2141,9 @@ export function createServer(
           if (pathname === "/api/workspace/rename") await workspaceRename(payload.workspace_id, payload.label as string);
           else if (pathname === "/api/workspace/move") await workspaceMove(payload.workspace_id, payload.insert_index as number);
           else await workspaceClose(payload.workspace_id, undefined, payload.close_group === true);
+          // a closed workspace's panes send no exit: without this, clients learn of it only after
+          // the collector's structure debounce, and the closed workspace stays on screen meanwhile
+          if (pathname === "/api/workspace/close") broadcastAll({ type: "session-changed" });
           return jsonResponse({ ok: true });
         } catch (error) {
           return errorResponse(error);
@@ -2138,6 +2174,7 @@ export function createServer(
             // herdr would keep an empty label as the tab's name, and its own tab row would show nothing
             const label = typeof payload.label === "string" ? payload.label.trim() : "";
             if (label === "") return badRequest("missing_label", "label is required");
+            if (label.length > MAX_LABEL_CHARS) return badRequest("label_too_long", `label must be at most ${MAX_LABEL_CHARS} characters`);
             await tabRename(payload.tab_id, label);
             // no pane event follows a rename, so the clients are told here
             broadcastAll({ type: "session-changed" });
@@ -3280,7 +3317,10 @@ export function createServer(
           }
         } catch (error) {
           const code = error instanceof HerdrError ? error.code : "command_failed";
-          send(client, { type: "error", code, message: error instanceof Error ? error.message : String(error) });
+          // an attach that could not start names its pane: the panes of a PC share this connection, and one
+          // without a pane would end every terminal on it
+          const failed = code === "attach_failed" && message.type === "attach" ? { pane_id: message.pane_id } : {};
+          send(client, { type: "error", code, message: error instanceof Error ? error.message : String(error), ...failed });
         }
       },
 

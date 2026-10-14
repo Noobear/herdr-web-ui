@@ -22,7 +22,7 @@ let mockedProcesses: { argv?: unknown }[] = [];
 describe("Devin pane identity", () => {
   const restores: Array<() => void> = [];
   beforeEach(() => {
-    const rpc = spyOn(herdr, "herdrRpc").mockImplementation(async (method) => {
+    const rpc = spyOn(herdr, "herdrRpc").mockImplementation(async (method: string) => {
       if (method !== "pane.process_info") throw new Error(`unexpected conversation fixture RPC: ${method}`);
       return { process_info: { foreground_processes: mockedProcesses } } as never;
     });
