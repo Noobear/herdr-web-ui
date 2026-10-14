@@ -118,15 +118,19 @@ describe("PtySession", () => {
 });
 
 describe("writeLine", () => {
-  it("survives a child that already closed its stdin", async () => {
+  // Only a child that really closes its stdin handle reaches EPIPE on Windows: Python's os.close(0) does;
+  // Bun's and Node's closeSync(0) / stdin.destroy() and an exited child do not, so skip where Python is absent.
+  const python = Bun.which(process.platform === "win32" ? "python" : "python3");
+  it.skipIf(!python)("survives a child that already closed its stdin", async () => {
     // on Windows the write settles later and an EPIPE rejects the returned promise instead of throwing
     const rejections: unknown[] = []; const track = (error: unknown) => rejections.push(error);
     process.on("unhandledRejection", track);
-    const proc = Bun.spawn([process.platform === "win32" ? "python" : "python3", "-c", "import os,time; os.close(0); time.sleep(3)"], { stdin: "pipe" });
+    let proc: ReturnType<typeof Bun.spawn> | undefined;
     try {
+      proc = Bun.spawn([python!, "-c", "import os,time; os.close(0); time.sleep(3)"], { stdin: "pipe" });
       await Bun.sleep(800);
-      writeLine(proc.stdin, "{}\n"); await Bun.sleep(300);
+      writeLine(proc.stdin as import("bun").FileSink, "{}\n"); await Bun.sleep(300);
       expect(rejections).toEqual([]);
-    } finally { process.off("unhandledRejection", track); proc.kill(); }
+    } finally { process.off("unhandledRejection", track); proc?.kill(); }
   });
 });
