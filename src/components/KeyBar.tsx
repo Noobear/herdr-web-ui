@@ -22,6 +22,8 @@ export interface KeyBarProps {
   /** on a touch screen: whether the keyboard types straight into the terminal (else the input line) */
   directTyping?: boolean;
   onToggleDirect?: () => void;
+  /** greys out only the direct-typing toggle (an input-line composition is in progress) */
+  directDisabled?: boolean;
 }
 
 /**
@@ -173,7 +175,7 @@ export const EXTRA_KEY_CAPS: Partial<Record<KeyBarExtra, { cap: string; label?: 
  * for touch, a hardware keyboard already has all of them. Hence role="group", not
  * toolbar: a toolbar promises arrow-key navigation between items, which these skip.
  */
-export function KeyBar({ onKey, modifiers, onToggleModifier, items, directTyping, onToggleDirect, disabled, holdScope }: KeyBarProps) {
+export function KeyBar({ onKey, modifiers, onToggleModifier, items, directTyping, onToggleDirect, directDisabled, disabled, holdScope }: KeyBarProps) {
   const t = useT();
   // only a bar that reaches the bottom of the screen keeps clear of the home indicator: a pane
   // stacked over another one has the other pane under its bar, not the indicator
@@ -197,7 +199,7 @@ export function KeyBar({ onKey, modifiers, onToggleModifier, items, directTyping
     <div className="key-bar" ref={barRef} role="group" aria-label={t("Terminal keys")}>
       {/* first: on a narrow cover screen the row scrolls, and the mode toggle must not be the key cut off */}
       {onToggleDirect && (
-        <Key disabled={disabled} dataKey="direct" label={t("Type straight into the terminal")} pressed={directTyping} onPress={onToggleDirect}>
+        <Key disabled={disabled || directDisabled} dataKey="direct" label={t("Type straight into the terminal")} pressed={directTyping} onPress={onToggleDirect}>
           <Keyboard aria-hidden="true" />
         </Key>
       )}
