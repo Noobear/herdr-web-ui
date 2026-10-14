@@ -120,8 +120,10 @@ describe("PtySession", () => {
 describe("writeLine", () => {
   // Only a child that really closes its stdin handle reaches EPIPE on Windows: Python's os.close(0) does;
   // Bun's and Node's closeSync(0) / stdin.destroy() and an exited child do not, so skip where Python is absent.
+  // Windows' Microsoft Store alias (WindowsApps\python.exe) is on PATH with no Python behind it: it exits non-zero.
   const python = Bun.which(process.platform === "win32" ? "python" : "python3");
-  it.skipIf(!python)("survives a child that already closed its stdin", async () => {
+  const runs = python !== null && Bun.spawnSync([python, "-c", ""], { stdout: "ignore", stderr: "ignore" }).exitCode === 0;
+  it.skipIf(!runs)("survives a child that already closed its stdin", async () => {
     // on Windows the write settles later and an EPIPE rejects the returned promise instead of throwing
     const rejections: unknown[] = []; const track = (error: unknown) => rejections.push(error);
     process.on("unhandledRejection", track);
