@@ -45,7 +45,7 @@ export async function checkIpadIme(browser: Browser, origin: string, pane: strin
       const deadline = Date.now() + 10_000;
       while (!(await check())) { assert(Date.now() < deadline, "iPad trace replay timed out"); await new Promise((resolve) => setTimeout(resolve, 25)); }
     };
-    const input = page.locator(".xterm-helper-textarea");
+    const input = page.locator(".xterm-helper-textarea:visible");
     const reset = async () => {
       ready = false;
       await page.goto(`${origin}/?pane=${encodeURIComponent(pane)}`);
