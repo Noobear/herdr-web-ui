@@ -22,6 +22,9 @@ describe("composerMessage and submitNote", () => {
     expect(["pane_not_found", "retired_submit_id"].map(submitNotTyped)).toEqual([true, true]);
     // refused before the paste because Claude's input box held a draft (#609)
     expect(submitNotTyped("input_draft")).toBe(true);
+    // refused by the view while the terminal holds input, before anything reached the socket
+    expect(submitNotTyped("held_input")).toBe(true);
+    expect(submitNote("held_input", "x")).toBe("Not sent: send or discard the held input first.");
     expect(submitNote("pending_input_unsupported", "x")).toBe("Update this PC to send messages in the next turn. Your draft stayed here.");
     expect(submitNotTyped("submit_changed")).toBe(false);
     expect(submitNotTyped("pending_uncertain")).toBe(false);
@@ -33,6 +36,15 @@ describe("composerMessage and submitNote", () => {
     // bash mode, a clipped box or an older bridge name none: the note alone
     expect(submitRefusal("input_draft", "x")).toBe(submitNote("input_draft", "x"));
     expect(submitRefusal("agent_blocked", "x", "ㅔ")).toBe(submitNote("agent_blocked", "x"));
+  });
+
+  it("offers to send anyway only when the server showed the box and named no draft", () => {
+    expect(submitRefusal("input_draft", "x", undefined, "! ls")).toEqual({ note: "Not sent: Claude Code's input box in the terminal may not be empty. It shows “! ls”.", anyway: true });
+    // a box the server could not read whole is shown nothing to send over: the plain note
+    expect(submitRefusal("input_draft", "x", undefined, "")).toBe(submitNote("input_draft", "x"));
+    // a named draft is cleared, not sent over
+    expect(submitRefusal("input_draft", "x", "ㅔ", "❯ ㅔ")).toEqual({ note: "Not sent: Claude Code's input box in the terminal already holds “ㅔ”.", draft: "ㅔ" });
+    expect(submitRefusal("agent_blocked", "x", undefined, "! ls")).toBe(submitNote("agent_blocked", "x"));
   });
 });
 
@@ -112,12 +124,12 @@ describe("insertLeadingMention", () => {
 
   it("goes in whole or not at all: a cut path would name a file that does not exist", () => {
     const full = "x".repeat(MAX_COMPOSER_CHARS - 2);
-    expect(insertLeadingMention(full, first, [])).toEqual({ text: full, at: 0, length: 0 });
+    expect(insertLeadingMention(full, first, [])).toEqual({ text: full, at: 0, length: 0, missing: 10 });
     const room = "x".repeat(MAX_COMPOSER_CHARS - first.length);
     expect(insertLeadingMention(room, first, [])).toEqual({ text: `${first}${room}`, at: 0, length: first.length });
     // the separating space counts: after a command with no room for it, nothing goes in
     const command = `/review${"x".repeat(MAX_COMPOSER_CHARS - 7 - first.length)}`;
-    expect(insertLeadingMention(command, first, [])).toEqual({ text: command, at: command.length, length: 0 });
+    expect(insertLeadingMention(command, first, [])).toEqual({ text: command, at: command.length, length: 0, missing: 1 });
   });
 });
 
@@ -174,6 +186,15 @@ describe("composer presentation helpers", () => {
     expect(composerStatusHint({ uploading: true, connected: false, text: "" })).toBe("uploading");
     // with a draft the placeholder is gone: the reconnecting sentence is the one said (the tile says Uploading)
     expect(composerStatusHint({ uploading: true, connected: false, text: "draft" })).toBe("offline");
+  });
+
+  it("counts the characters left only near the limit, and puts a path with no room first", () => {
+    const near = "x".repeat(MAX_COMPOSER_CHARS - 200);
+    expect(composerStatusHint({ uploading: false, connected: true, text: "x".repeat(MAX_COMPOSER_CHARS - 201) })).toBe(null);
+    expect(composerStatusHint({ uploading: false, connected: true, text: near })).toBe("near-limit");
+    expect(composerStatusHint({ uploading: true, connected: true, text: near })).toBe("uploading");
+    expect(composerStatusHint({ uploading: true, connected: true, text: near, noRoom: true })).toBe("no-room");
+    expect(composerStatusHint({ uploading: false, connected: false, text: near, noRoom: true })).toBe("offline");
   });
 
   it("removes the effort word before shortening the model", () => {

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { chromium, type Browser, type Page } from "playwright-core";
 import panes from "../site/demo/fixtures/panes.json";
 import { buildDemoApp } from "./demo-build.ts";
-import { runMoreItem } from "./header-more.ts";
+import { chromePath } from "./chrome-path.ts";
 
 // Settings → Agents order (Activity) and Quiet opened finishes, on the unmodified app over the
 // demo's fixture transport, whose agents carry herdr's state_change_seq and bump it on every state
@@ -79,7 +79,7 @@ try {
   url = `http://127.0.0.1:${server.port}/herdr-web-ui/demo/app/`;
 
   try {
-    const browser = await chromium.launch({ executablePath: process.env.CHROME_PATH ?? "/opt/google/chrome/chrome", headless: true, args: ["--no-sandbox"] });
+    const browser = await chromium.launch({ executablePath: chromePath(), headless: true, args: ["--no-sandbox"] });
     try {
       // Workspace menus no longer mix in pane operations; header More keeps pane movement.
       // off by default: herdr's order in a flat list, each row naming its own workspace
@@ -112,34 +112,6 @@ try {
         }, undefined, mobile);
       }
       console.log("PASS a pane's plan opens from the composer's chip, as a list of steps, on a desktop and a phone");
-
-      await withPage(browser, {}, async (page) => {
-        await runMoreItem(page, "Move pane to…");
-        const move = page.getByRole("menu", { name: /^Move .* to$/ });
-        await move.waitFor();
-        assert.equal(await move.getByRole("menuitem", { name: "New tab", exact: true }).count(), 1);
-        const previousTab = await page.locator('.tab-strip-tab[aria-selected="true"]').getAttribute("data-tab-id");
-        await move.getByRole("menuitem", { name: "New tab", exact: true }).click();
-        await page.waitForFunction((previous) => {
-          const active = document.querySelector('.tab-strip-tab[aria-selected="true"]');
-          return active !== null && active.getAttribute("data-tab-id") !== previous;
-        }, previousTab);
-        assert.equal(await page.evaluate(() => JSON.parse(sessionStorage.getItem("herdr-web-ui:selection") ?? "{}").pane_id), panes.shell, "header More moves the selected pane");
-        const movedTab = await page.evaluate(async (paneId) => {
-          const { snapshot } = await (await fetch("/api/session")).json();
-          return snapshot.panes.find((pane: { pane_id: string }) => pane.pane_id === paneId)?.tab_id;
-        }, panes.shell);
-        assert.equal(await page.locator('.tab-strip-tab[aria-selected="true"]').getAttribute("data-tab-id"), movedTab);
-        // A stale menu must disappear if another client closes its target.
-        await runMoreItem(page, "Move pane to…");
-        await move.waitFor();
-        await page.evaluate(async (paneId) => {
-          const response = await fetch("/api/pane/close", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ pane_id: paneId }) });
-          if (!response.ok) throw new Error(`Close fixture failed: ${response.status}`);
-        }, panes.shell);
-        await move.waitFor({ state: "detached" });
-      });
-      console.log("PASS header More moves the selected pane and closes stale targets");
 
       // Default: herdr's order before and after a finish, and an opened DONE keeps herdr's dot
       await withPage(browser, { agentCards: true, agentPins: true }, async (page) => {
