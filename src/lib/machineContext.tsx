@@ -14,7 +14,6 @@ export function useMachineApi() {
     fetchPanePrompt: (pane: string) => api.fetchPanePrompt(pane, id),
     fetchPanePromptState: (pane: string) => api.fetchPanePromptState(pane, id),
     answerPanePrompt: (answer: Parameters<typeof api.answerPanePrompt>[0]) => api.answerPanePrompt(answer, id),
-    filterPanePrompt: (filter: Parameters<typeof api.filterPanePrompt>[0]) => api.filterPanePrompt(filter, id),
     uploadPaneImage: (pane: string, image: Blob) => api.uploadPaneImage(pane, image, id),
     fetchPaneCommands: (pane: string) => api.fetchPaneCommands(pane, id),
     fetchPaneFiles: (pane: string, query: string, limit = 20) => api.fetchPaneFiles(pane, query, limit, id),

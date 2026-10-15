@@ -26,23 +26,11 @@ export interface PromptCardProps {
   /** an option picked by a typed message, sent only on Confirm */
   typedAnswer?: TypedAnswer | null;
   onTypedAnswerDone?(): void;
-  /** a search typed into a model list's box came back: the list as it now shows */
-  onFiltered?(prompt: InteractivePrompt): void;
 }
 
-/** how long the search box waits after a key before it types the search into the list */
-const FILTER_DEBOUNCE_MS = 250;
-/** how long after its last key the box keeps what it holds over a filter the terminal shows */
-const FILTER_QUIET_MS = 1_500;
-
-export function PromptCard({ paneId, prompt, onPromptChanged, onAnswered, typedAnswer = null, onTypedAnswerDone, onFiltered }: PromptCardProps) {
+export function PromptCard({ paneId, prompt, onPromptChanged, onAnswered, typedAnswer = null, onTypedAnswerDone }: PromptCardProps) {
   const t = useT();
-  const { answerPanePrompt, filterPanePrompt } = useMachineApi();
-  // a model list's search: what the box holds, and when it was last typed in (0: not yet)
-  const [query, setQuery] = useState(prompt.filter?.text ?? "");
-  const typedAt = useRef(0);
-  const latest = useRef(prompt);
-  latest.current = prompt;
+  const { answerPanePrompt } = useMachineApi();
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [custom, setCustom] = useState("");
   const [pending, setPending] = useState(false);
@@ -112,28 +100,6 @@ export function PromptCard({ paneId, prompt, onPromptChanged, onAnswered, typedA
     return true;
   };
 
-  // a filter typed in the terminal shows in the box too, but never over keys the box just took
-  const shownFilter = prompt.filter?.text;
-  useEffect(() => {
-    if (shownFilter === undefined || Date.now() - typedAt.current < FILTER_QUIET_MS) return;
-    setQuery((current) => current.trim() === shownFilter ? current : shownFilter);
-  }, [shownFilter]);
-  // the box's search goes into the list a moment after the last key, replacing what it held there
-  useEffect(() => {
-    const current = latest.current;
-    if (typedAt.current === 0 || current.filter === undefined || query.trim() === current.filter.text) return;
-    const timer = window.setTimeout(() => {
-      void filterPanePrompt({ pane_id: paneId, prompt_id: latest.current.id, text: query }).then((next) => {
-        if (shown.current && next) onFiltered?.(next);
-      }, (cause) => {
-        if (!shown.current) return;
-        if (cause instanceof ApiError && cause.status === 409 && cause.code === "prompt_changed") onPromptChanged();
-        else setError(cause instanceof Error ? cause.message : String(cause));
-      });
-    }, FILTER_DEBOUNCE_MS);
-    return () => window.clearTimeout(timer);
-  }, [query]);
-
   const toggle = (index: number): void => {
     setSelected((current) => {
       const next = new Set(current);
@@ -194,12 +160,6 @@ export function PromptCard({ paneId, prompt, onPromptChanged, onAnswered, typedA
       )}
       {/* the reference text (a command, a plan, a diff) is the one part that gives way when the card is short */}
       {prompt.body !== null && prompt.body.length > 0 && <pre className={`prompt-card-body${prompt.body.includes("\n") ? "" : " is-line"}`}>{prompt.body}</pre>}
-      {/* a model list narrows as its name is typed: the rows below are the agent's own matches */}
-      {prompt.filter !== undefined && (
-        <input className="input prompt-card-search" type="search" value={query} placeholder={t("Search models")} aria-label={t("Search models")}
-          autoComplete="off" autoCapitalize="off" spellCheck={false} disabled={pending}
-          onChange={(event) => { typedAt.current = Date.now(); setQuery(event.currentTarget.value); }} />
-      )}
       {hasChoices && (
         <div className="prompt-card-options" role={prompt.multi_select ? "group" : undefined} aria-label={prompt.multi_select ? prompt.question : undefined}>
           {prompt.options.map((option, index) => {

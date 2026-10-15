@@ -1030,7 +1030,6 @@ export const ZH: Record<string, string> = {
   "Reading the plan…": "正在读取计划…",
   "Couldn't read the plan. Trying again…": "无法读取计划，正在重试…",
   "Only part of this file is shown. Download it to read the rest.": "仅显示文件的一部分。请下载文件以阅读其余内容。",
-  "Search models": "搜索模型",
   "Something went wrong": "出了点问题",
   "The app hit an error and stopped drawing. Your terminals keep running in herdr.": "应用出错，无法继续显示。你的终端仍在 herdr 中运行。",
   "Copy details": "复制详细信息",

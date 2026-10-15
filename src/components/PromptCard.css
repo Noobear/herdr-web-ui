@@ -374,12 +374,6 @@
   gap: var(--space-2);
 }
 
-/* a model list's search box: the row of the list it narrows, full width */
-.prompt-card-search {
-  width: 100%;
-  min-width: 0;
-}
-
 /* the field grows to the Send button's height, which is the touch target on a phone */
 .prompt-card-custom .input {
   flex: 1 1 auto;

@@ -1026,7 +1026,6 @@ export const KO: Record<string, string> = {
   "Reading the plan…": "계획을 읽는 중…",
   "Couldn't read the plan. Trying again…": "계획을 읽지 못했습니다. 다시 시도하는 중…",
   "Only part of this file is shown. Download it to read the rest.": "파일의 일부만 표시됩니다. 나머지는 다운로드해 확인하세요.",
-  "Search models": "모델 검색",
   "Something went wrong": "문제가 발생했습니다",
   "The app hit an error and stopped drawing. Your terminals keep running in herdr.": "앱에 오류가 발생해 화면을 그리지 못했습니다. 터미널은 herdr에서 계속 실행 중입니다.",
   "Copy details": "자세한 내용 복사",

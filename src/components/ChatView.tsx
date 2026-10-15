@@ -88,8 +88,6 @@ function dropPendingListScroll(list: LegendListRef | null): void {
 
 const TRANSCRIPT_LINES = 400;
 const PROMPT_POLL_MS = 2000;
-/** while a model list is open: a search typed in the terminal shows on its card as it narrows */
-const MODEL_LIST_POLL_MS = 500;
 /** Scrolling this close to the top asks for the page before it. */
 const LOAD_OLDER_PX = 400;
 
@@ -750,10 +748,7 @@ export const ChatView = memo(function ChatView({ paneId, active = true, visible:
   // id is a hash of what it says, so the same question asked twice shares it: the read below keeps
   // one object while one prompt stays on screen, and that object is what tells them apart.
   const promptOccurrence = useRef<{ of: InteractivePrompt | null; count: number }>({ of: null, count: 0 });
-  // a model list searched (in the card's box or the terminal) redraws as another prompt with each
-  // key: it stays the one card, so the box keeps its text and its focus
-  const sameList = (before: InteractivePrompt | null, after: InteractivePrompt): boolean => before?.filter !== undefined && after.filter !== undefined && before.agent === after.agent;
-  if (prompt !== null && promptOccurrence.current.of !== prompt) promptOccurrence.current = { of: prompt, count: promptOccurrence.current.count + (sameList(promptOccurrence.current.of, prompt) ? 0 : 1) };
+  if (prompt !== null && promptOccurrence.current.of !== prompt) promptOccurrence.current = { of: prompt, count: promptOccurrence.current.count + 1 };
   // turns the transcript holds on a path /tree walked away from: no page can reach them, so the
   // only way to say they exist is to be told, and to say it where the reader would look for them
   const [abandoned, setAbandoned] = useState<{ count: number; branches: number; summary: string | null } | null>(null);
@@ -1098,10 +1093,8 @@ export const ChatView = memo(function ChatView({ paneId, active = true, visible:
     const readPrompt = async (): Promise<void> => {
       // the same prompt keeps its object: the composer and the card only change with it
       const sent = sentKeyRef.current;
-      let listOpen = false;
       try {
         const next = await fetchPanePromptState(paneId);
-        listOpen = next.prompt?.filter !== undefined;
         if (!cancelled) {
           setPrompt((current) => current?.id === next.prompt?.id ? current : next.prompt);
           if (sentKeyRef.current === sent) {
@@ -1112,7 +1105,7 @@ export const ChatView = memo(function ChatView({ paneId, active = true, visible:
         }
       }
       catch { if (!cancelled) { setPrompt(null); setRestored(null); onSuggestionRef.current?.(paneId, null); onRestoredRef.current?.(paneId, null); } }
-      finally { if (!cancelled) timer = window.setTimeout(() => void readPrompt(), listOpen ? MODEL_LIST_POLL_MS : PROMPT_POLL_MS); }
+      finally { if (!cancelled) timer = window.setTimeout(() => void readPrompt(), PROMPT_POLL_MS); }
     };
     void readPrompt();
     return () => { cancelled = true; window.clearTimeout(timer); };
@@ -1427,7 +1420,7 @@ export const ChatView = memo(function ChatView({ paneId, active = true, visible:
       input card, where PaneTerminal keeps its place. The prompt itself (its poll, the answer, the
       re-read) stays here. */}
   {prompt !== null && promptDock !== null && createPortal(
-    <PromptCard key={promptOccurrence.current.count} paneId={paneId} prompt={prompt} onFiltered={(next) => setPrompt((current) => current?.id === next.id ? current : next)} typedAnswer={pendingAnswer?.promptId === prompt.id ? pendingAnswer.answer : null} onTypedAnswerDone={() => onPendingAnswerDone?.(paneId, prompt.id)} onPromptChanged={() => setPromptPollKey((key) => key + 1)} onAnswered={(toMessageBox) => {
+    <PromptCard key={promptOccurrence.current.count} paneId={paneId} prompt={prompt} typedAnswer={pendingAnswer?.promptId === prompt.id ? pendingAnswer.answer : null} onTypedAnswerDone={() => onPendingAnswerDone?.(paneId, prompt.id)} onPromptChanged={() => setPromptPollKey((key) => key + 1)} onAnswered={(toMessageBox) => {
       // the card reports only while it is the one shown; still, only its own prompt is cleared
       onPromptAnswered?.(toMessageBox);
       setPrompt((current) => current === prompt ? null : current);
