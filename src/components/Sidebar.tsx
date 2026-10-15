@@ -5,15 +5,18 @@ import "./Sidebar.css";
 
 import type { AgentStatus, PaneInfo, PlanSummary, SessionSnapshot, WorkspaceInfo } from "../../shared/protocol.ts";
 import { paneTitle } from "../../shared/notify-policy.ts";
+import { MAX_LABEL_CHARS } from "../../shared/labels.ts";
 import { useMachineApi, useMachineId } from "../lib/machineContext.tsx";
 import type { AppActions } from "../lib/actions.ts";
-import { knownStatus, rollupStatus, STATUS_WORD } from "../lib/status.ts";
+import { indicatorGlyph, knownStatus, rollupStatus, STATUS_WORD } from "../lib/status.ts";
 import { AgentMark } from "./AgentMark.tsx";
+import { WorkspaceFavicon } from "./WorkspaceFavicon.tsx";
 import { ConfirmDialog } from "./ConfirmDialog.tsx";
 import { RowMenu, type RowMenuItem } from "./RowMenu.tsx";
 import { WorktreeDialog, type WorktreeDialogMode } from "./WorktreeDialog.tsx";
 import { focusWorkspaceListToggle } from "../lib/focus.ts";
-import { folderName, shortPathTitle, taskRowLines } from "../lib/paneName.ts";
+import { folderName, shortPathTitle, stripPaneChrome, taskRowLines } from "../lib/paneName.ts";
+import { ApiError } from "../lib/api.ts";
 import { useT } from "../lib/i18n.ts";
 import { rosterPanes } from "../lib/dagPane.ts";
 import { useSidebarActivity } from "../lib/sidebarActivity.tsx";
@@ -21,6 +24,7 @@ import { useSettings } from "../lib/settings.ts";
 import { useMediaQuery } from "../lib/useMediaQuery.ts";
 import { useWorktreeBranches } from "../lib/useWorktreeBranches.ts";
 import { watchTouchReorder } from "../lib/touchReorder.ts";
+import { placeBlock, workspaceMoves } from "../lib/workspaceOrder.ts";
 import { worktreeLabel } from "../lib/worktreeName.ts";
 import { paneMark, sidebarAgents, workspaceAgentLabels } from "../lib/sidebarAgents.ts";
 import { PANE_DRAG_TYPE, paneDragData } from "../lib/split.ts";
@@ -36,16 +40,6 @@ function storedWorktreeCollapsed(machineId: string, repoKeys: string[]): Set<str
   return collapsed;
 }
 
-/** shell prompt titles: `user@host:` is chrome, the path after it is the information */
-const SHELL_PREFIX = /^[^:@\s]+@[^:@\s]+:/;
-/** Herdr's agent glyph and spinner are already represented by the row mark and badge. */
-const AGENT_CHROME = /^π\s*[^\p{L}\p{N}\s]?\s*/u;
-
-function stripPaneChrome(title: string, agent: string | null | undefined): string {
-  const shellStripped = title.replace(SHELL_PREFIX, "");
-  return agent ? shellStripped.replace(AGENT_CHROME, "") : shellStripped;
-}
-
 export { paneTitle };
 
 /**
@@ -54,6 +48,14 @@ export { paneTitle };
  */
 export function displayPaneTitle(pane: PaneInfo): string {
   return pane.label?.trim() || shortPathTitle(stripPaneChrome(paneTitle(pane), pane.agent)) || pane.pane_id;
+}
+
+/**
+ * The title an alert names a pane by: as a row's, with the folder Codex adds after its thread
+ * kept. A notification is read away from the row that says where the pane is.
+ */
+export function alertPaneTitle(pane: PaneInfo): string {
+  return pane.label?.trim() || shortPathTitle(stripPaneChrome(paneTitle(pane), pane.agent, true)) || pane.pane_id;
 }
 
 /** herdr could not bring this pane back after a restart (0.9.3+ `restore_error`): a warning in the status cell, its reason on hover. */
@@ -68,7 +70,7 @@ export function RestoreErrorBadge({ reason }: { reason: string }) {
   );
 }
 
-/** Every breathing dot keeps the document clock's phase, so a row that starts working breathes in step with the rest. */
+/** Every breathing dot or glyph keeps the document clock's phase, so a row that starts working breathes in step with the rest. */
 function alignBreath(event: AnimationEvent<HTMLSpanElement>) {
   if (event.animationName !== "sidebar-breathe") return;
   for (const animation of event.currentTarget.getAnimations()) animation.startTime = 0;
@@ -76,13 +78,16 @@ function alignBreath(event: AnimationEvent<HTMLSpanElement>) {
 
 export function StatusBadge({ status, compact = false }: { status?: AgentStatus; compact?: boolean }) {
   const t = useT();
+  const { settings } = useSettings();
   const value = knownStatus(status);
   const label = t(STATUS_WORD[value]);
   const description = value === "waiting" ? t("Agent waiting on background work") : t("Agent {status}", { status: label });
-  // a compact cell draws only the states that ask for a look: a red question mark while the agent
-  // waits for an answer, a green dot once it has finished and was not looked at, a working-coloured
-  // dot that breathes while it runs, a working-coloured ring held still while its turn waits on
-  // background work. Ready and unknown keep the cell, its label and its tooltip
+  // classic (the default): a compact cell draws only the states that ask for a look: a red question
+  // mark while the agent waits for an answer, a green dot once it has finished and was not looked
+  // at, a working-coloured dot that breathes while it runs, a working-coloured ring held still while
+  // its turn waits on background work. Ready and unknown keep the cell, its label and its tooltip.
+  // Dots or Symbols: herdr's TUI glyph for every state, in herdr's color (lib/status.ts, Sidebar.css)
+  const indicators = settings.statusIndicators;
   const dot = value === "working" || value === "done" || value === "waiting";
   return (
     <span
@@ -92,8 +97,9 @@ export function StatusBadge({ status, compact = false }: { status?: AgentStatus;
       aria-label={compact ? description : undefined}
       title={description}
     >
-      {compact && value === "blocked" && <span className="sidebar-status-mark" aria-hidden="true">?</span>}
-      {compact && dot && <span className="sidebar-status-dot" aria-hidden="true" onAnimationStart={value === "working" ? alignBreath : undefined} />}
+      {compact && indicators !== "classic" && <span className="sidebar-status-glyph" aria-hidden="true" onAnimationStart={value === "working" ? alignBreath : undefined}>{indicatorGlyph(value, indicators)}</span>}
+      {compact && indicators === "classic" && value === "blocked" && <span className="sidebar-status-mark" aria-hidden="true">?</span>}
+      {compact && indicators === "classic" && dot && <span className="sidebar-status-dot" aria-hidden="true" onAnimationStart={value === "working" ? alignBreath : undefined} />}
       <span className={compact ? "visually-hidden" : undefined}>{label}</span>
     </span>
   );
@@ -174,10 +180,30 @@ export function Sidebar({ snapshot, online, selectedPaneId, actions }: SidebarPr
   const { settings } = useSettings();
   const twoLine = settings.sidebarRows === "two";
   const machineId = useMachineId();
-  // a DONE looked at here reads as ready with Quiet opened finishes on (lib/sidebarActivity.tsx)
   const activity = useSidebarActivity();
-  const { branches, rememberOpened } = useWorktreeBranches(snapshot, online);
-  const { closeWorkspace, moveWorkspace, removeWorktree, renameWorkspace } = useMachineApi();
+  const { branches, rememberOpened } = useWorktreeBranches(snapshot, online, true);
+  const { closeWorkspace, listWorktrees, moveWorkspace, removeWorktree, renameWorkspace } = useMachineApi();
+  // herdr marks only a workspace it opened as a worktree. One made on a repository's folder has no
+  // `worktree`, and it is where the first worktree starts: each is asked once whether git answers
+  // for it. A refusal (4xx) is an answer and is kept; a failure to ask is not, so that workspace
+  // keeps what was known of it and is asked again when the set changes or the PC comes back.
+  const unmarked = (snapshot?.workspaces ?? []).filter((workspace) => !workspace.worktree).map((workspace) => workspace.workspace_id).join("\n");
+  const [repositoryWorkspaces, setRepositoryWorkspaces] = useState<ReadonlySet<string>>(() => new Set());
+  const repositoryAnswers = useRef(new Map<string, boolean>());
+  useEffect(() => {
+    const known = repositoryAnswers.current;
+    if (!online || unmarked === "") { known.clear(); setRepositoryWorkspaces(new Set()); return; }
+    const ids = unmarked.split("\n");
+    for (const id of [...known.keys()]) if (!ids.includes(id)) known.delete(id);
+    let live = true;
+    const publish = () => { if (live) setRepositoryWorkspaces(new Set(ids.filter((id) => known.get(id) === true))); };
+    publish();
+    void Promise.all(ids.filter((id) => !known.has(id)).map((id) => listWorktrees(id).then(
+      () => { if (live) known.set(id, true); },
+      (error: unknown) => { if (live && error instanceof ApiError && error.status < 500) known.set(id, false); },
+    ))).then(publish);
+    return () => { live = false; };
+  }, [listWorktrees, unmarked, online]);
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [confirm, setConfirm] = useState<ConfirmState | null>(null);
   const [worktreeDialog, setWorktreeDialog] = useState<{ mode: WorktreeDialogMode; workspace: WorkspaceInfo } | null>(null);
@@ -332,7 +358,7 @@ export function Sidebar({ snapshot, online, selectedPaneId, actions }: SidebarPr
     // worktree workspaces close with it, which herdr refuses without close_group
     const linked = workspace.worktree?.is_linked_worktree === true;
     const worktrees = linked ? [] : (snapshot?.workspaces.filter((candidate) => candidate.worktree?.is_linked_worktree && candidate.worktree.repo_key === workspace.worktree?.repo_key) ?? []);
-    const worktreeItems: RowMenuItem[] = workspace.worktree && !linked ? [
+    const worktreeItems: RowMenuItem[] = (workspace.worktree || repositoryWorkspaces.has(workspace.workspace_id)) && !linked ? [
       { id: "new-worktree", label: t("New worktree"), icon: GitBranch, run: () => setWorktreeDialog({ mode: "create", workspace }) },
       { id: "open-worktree", label: t("Open worktree…"), icon: FolderOpen, run: () => setWorktreeDialog({ mode: "open", workspace }) },
     ] : [];
@@ -350,7 +376,11 @@ export function Sidebar({ snapshot, online, selectedPaneId, actions }: SidebarPr
     // a repository's open worktree workspaces go with it
     const closeItem: RowMenuItem = { id: "close", label: t("Close workspace"), icon: X, danger: true, divider: true, run: () => setConfirm({
       title: t("Close workspace {name}?", { name: workspace.label }),
-      body: worktrees.length > 0 ? t("{n} panes and {m} worktree workspaces close with it; the agents in them stop, and the checkouts stay.", { n: paneCount, m: worktrees.length }) : t("{n} panes close with it, and the agents in them stop.", { n: paneCount }),
+      body: worktrees.length > 0
+        ? t(paneCount === 1
+          ? (worktrees.length === 1 ? "{n} pane and {m} worktree workspace close with it; the agents in them stop, and the checkout stays." : "{n} pane and {m} worktree workspaces close with it; the agents in them stop, and the checkouts stay.")
+          : (worktrees.length === 1 ? "{n} panes and {m} worktree workspace close with it; the agents in them stop, and the checkout stays." : "{n} panes and {m} worktree workspaces close with it; the agents in them stop, and the checkouts stay."), { n: paneCount, m: worktrees.length })
+        : t(paneCount === 1 ? "{n} pane closes with it, and the agent in it stops." : "{n} panes close with it, and the agents in them stop.", { n: paneCount }),
       run: () => leave(() => closeWorkspace(workspace.workspace_id, worktrees.length > 0)),
     }) };
     // One native workspace menu for both the pointer and the explicit ⋯ button.
@@ -389,7 +419,11 @@ export function Sidebar({ snapshot, online, selectedPaneId, actions }: SidebarPr
   const saveWorkspaceRename = (workspaceId: string): void => {
     const typed = workspaceLabel;
     const label = typed.trim();
+    // herdr would keep an empty name, and the row would show none: the editor stays open
+    if (label === "") { noteError(t("A workspace needs a name."), workspaceId); return; }
     setEditingWorkspaceId(null);
+    // a name herdr set longer than the field allows is not sent back to be refused
+    if (label === snapshotRef.current?.workspaces.find((candidate) => candidate.workspace_id === workspaceId)?.label) return;
     void renameWorkspace(workspaceId, label).catch((reason: unknown) => {
       // as for a pane: the typed name survives a failed request, for as long as the workspace does
       if (!editorOpen() && snapshotRef.current?.workspaces.some((candidate) => candidate.workspace_id === workspaceId)) {
@@ -400,17 +434,14 @@ export function Sidebar({ snapshot, online, selectedPaneId, actions }: SidebarPr
     });
   };
 
-  const reorderWorkspace = (workspaceId: string, insertIndex: number): void => {
-    const sourceIndex = workspaceOrder.indexOf(workspaceId);
-    if (sourceIndex < 0) return;
-    const boundedIndex = Math.max(0, Math.min(workspaceOrder.length - 1, insertIndex));
-    if (sourceIndex === boundedIndex) return;
+  const reorderWorkspaces = (next: string[]): void => {
     const previous = workspaceOrder;
-    const next = [...workspaceOrder];
-    next.splice(sourceIndex, 1);
-    next.splice(boundedIndex, 0, workspaceId);
+    const moves = workspaceMoves(previous, next);
+    if (moves.length === 0) return;
     setWorkspaceOrder(next);
-    void moveWorkspace(workspaceId, boundedIndex).catch((reason: unknown) => {
+    void (async () => {
+      for (const move of moves) await moveWorkspace(move.workspaceId, move.insertIndex);
+    })().catch((reason: unknown) => {
       // only this move's own optimistic order is rolled back: if a later reorder has landed in
       // the meantime, its order is the newer one and reverting to `previous` would undo it
       setWorkspaceOrder((current) => (current.length === next.length && current.every((id, index) => id === next[index]) ? previous : current));
@@ -433,43 +464,44 @@ export function Sidebar({ snapshot, online, selectedPaneId, actions }: SidebarPr
     if (payload.machine_id !== machineId || typeof payload.workspace_id !== "string") return;
     const sourceId = dragWorkspaceId ?? payload.workspace_id;
     setDragWorkspaceId(null);
-    const index = dropIndex(sourceId, targetWorkspaceId);
-    if (index !== null) reorderWorkspace(sourceId, index);
+    const next = dropOrder(sourceId, targetWorkspaceId);
+    if (next !== null) reorderWorkspaces(next);
   };
 
   // The roster shows groups: a repository's workspace moves past the next or previous group as
-  // one (herdr keeps its worktrees packed behind it), and a worktree moves among its siblings.
-  // The index herdr gets is the edge of the group the move lands on.
-  const moveIndex = (workspaceId: string, direction: -1 | 1): number | null => {
+  // one, and a worktree moves among its siblings. herdr moves only the workspace it is told to,
+  // so a group's worktrees are moved with it (lib/workspaceOrder.ts).
+  const groupIds = (group: (typeof worktreeGroups)[number]): string[] => [group.workspace, ...group.children].map((workspace) => workspace.workspace_id);
+  const moveOrder = (workspaceId: string, direction: -1 | 1): string[] | null => {
+    const side = direction === 1 ? "after" : "before";
     const groupIndex = worktreeGroups.findIndex((group) => group.workspace.workspace_id === workspaceId);
     if (groupIndex >= 0) {
       const target = worktreeGroups[groupIndex + direction];
-      if (!target) return null;
-      const edge = direction === 1 ? (target.children[target.children.length - 1] ?? target.workspace) : target.workspace;
-      return workspaceOrder.indexOf(edge.workspace_id);
+      return target ? placeBlock(workspaceOrder, groupIds(worktreeGroups[groupIndex]!), groupIds(target), side) : null;
     }
     const parent = worktreeGroups.find((group) => group.children.some((child) => child.workspace_id === workspaceId));
     if (!parent) return null;
     const sibling = parent.children[parent.children.findIndex((child) => child.workspace_id === workspaceId) + direction];
-    return sibling ? workspaceOrder.indexOf(sibling.workspace_id) : null;
+    return sibling ? placeBlock(workspaceOrder, [workspaceId], [sibling.workspace_id], side) : null;
   };
   const moveVisible = (workspaceId: string, direction: -1 | 1): void => {
-    const index = moveIndex(workspaceId, direction);
-    if (index !== null) reorderWorkspace(workspaceId, index);
+    const next = moveOrder(workspaceId, direction);
+    if (next !== null) reorderWorkspaces(next);
   };
 
-  /** where a dropped workspace lands, in the flat order, or nowhere when the drop crosses a group's edge */
-  const dropIndex = (sourceId: string, targetId: string): number | null => {
+  /** the order a dropped workspace makes, or none when the drop crosses a group's edge */
+  const dropOrder = (sourceId: string, targetId: string): string[] | null => {
     const sourceGroup = worktreeGroups.find((group) => group.workspace.workspace_id === sourceId);
     if (sourceGroup) {
       const targetGroup = worktreeGroups.find((group) => group.workspace.workspace_id === targetId || group.children.some((child) => child.workspace_id === targetId));
       if (!targetGroup || targetGroup === sourceGroup) return null;
       const movingDown = workspaceOrder.indexOf(sourceId) < workspaceOrder.indexOf(targetGroup.workspace.workspace_id);
-      const edge = movingDown ? (targetGroup.children[targetGroup.children.length - 1] ?? targetGroup.workspace) : targetGroup.workspace;
-      return workspaceOrder.indexOf(edge.workspace_id);
+      return placeBlock(workspaceOrder, groupIds(sourceGroup), groupIds(targetGroup), movingDown ? "after" : "before");
     }
     const parent = worktreeGroups.find((group) => group.children.some((child) => child.workspace_id === sourceId));
-    return parent && parent.children.some((child) => child.workspace_id === targetId) ? workspaceOrder.indexOf(targetId) : null;
+    if (!parent || sourceId === targetId || !parent.children.some((child) => child.workspace_id === targetId)) return null;
+    const movingDown = workspaceOrder.indexOf(sourceId) < workspaceOrder.indexOf(targetId);
+    return placeBlock(workspaceOrder, [sourceId], [targetId], movingDown ? "after" : "before");
   };
 
   // a finger's drag lands where the mouse's does: the same groups, the same index for herdr
@@ -480,8 +512,8 @@ export function Sidebar({ snapshot, online, selectedPaneId, actions }: SidebarPr
     onOver: (id) => setTouchDrag((current) => current && { ...current, over: id }),
     onDrop: (id, target) => {
       setTouchDrag(null);
-      const index = target === null || target === id ? null : dropIndex(id, target);
-      if (index !== null) reorderWorkspace(id, index);
+      const next = target === null || target === id ? null : dropOrder(id, target);
+      if (next !== null) reorderWorkspaces(next);
     },
     onCancel: () => setTouchDrag(null),
   };
@@ -499,7 +531,7 @@ export function Sidebar({ snapshot, online, selectedPaneId, actions }: SidebarPr
 
   /** where a held row would land, drawn as a line: before or after a row, or after a group's worktrees */
   const dropMark = ((): { id: string; side: "before" | "after"; children: boolean } | null => {
-    if (!touchDrag?.over || touchDrag.over === touchDrag.source || dropIndex(touchDrag.source, touchDrag.over) === null) return null;
+    if (!touchDrag?.over || touchDrag.over === touchDrag.source || dropOrder(touchDrag.source, touchDrag.over) === null) return null;
     const down = workspaceOrder.indexOf(touchDrag.source) < workspaceOrder.indexOf(touchDrag.over);
     const sourceGroup = worktreeGroups.some((group) => group.workspace.workspace_id === touchDrag.source);
     const targetGroup = sourceGroup ? worktreeGroups.find((group) => group.workspace.workspace_id === touchDrag.over || group.children.some((child) => child.workspace_id === touchDrag.over)) : undefined;
@@ -564,7 +596,7 @@ export function Sidebar({ snapshot, online, selectedPaneId, actions }: SidebarPr
           aria-expanded={!collapsed}
           aria-controls={contentsId}
           onClick={() => setWorktreeCollapsed(repoKey, !collapsed)}
-        >{collapsed ? <Folder aria-hidden="true" /> : <FolderOpen aria-hidden="true" />}</button> : <span className="sidebar-mark workspace-folder" aria-hidden="true"><Folder /></span>}
+        >{collapsed ? <Folder aria-hidden="true" /> : <FolderOpen aria-hidden="true" />}</button> : <WorkspaceFavicon root={workspace.worktree?.checkout_path ?? pane.cwd ?? null} fallback={<span className="sidebar-mark workspace-folder" aria-hidden="true"><Folder /></span>} />}
         <div
           className="pane-select workspace-select"
           role="button"
@@ -591,6 +623,7 @@ export function Sidebar({ snapshot, online, selectedPaneId, actions }: SidebarPr
             className="input workspace-rename-input"
             aria-label={t("Workspace name")}
             autoFocus
+            maxLength={MAX_LABEL_CHARS}
             value={workspaceLabel}
             onClick={(event) => event.stopPropagation()}
             onChange={(event) => setWorkspaceLabel(event.target.value)}
@@ -667,6 +700,7 @@ export function Sidebar({ snapshot, online, selectedPaneId, actions }: SidebarPr
         const repoKey = worktreeDialog.workspace.worktree?.repo_key;
         if (repoKey) setWorktreeCollapsed(repoKey, false);
         setWorktreeDialog(null);
+        if (opened.agent_started === true) actions.agentStarted(machineId, opened.pane_id);
         actions.selectPane(opened.pane_id);
       }} />}
     </div>

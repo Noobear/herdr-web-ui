@@ -578,7 +578,7 @@ function parseClaudeQuestion(screen: string): ParsedPrompt | null {
     // emptied first, after the cursor and before it (ctrl+k, ctrl+u; measured on 2.1.295)
     ...(drafted ? {
       customSteps: (text: string) => [
-        ...keySteps([...navigationKeys(customIndex - rows.findIndex((row) => row.selected)), "ctrl+k", "ctrl+u"]),
+        ...keySteps([...navigationKeys(customIndex - rowAt), "ctrl+k", "ctrl+u"]),
         { text }, ...keySteps([KEY.enter]),
       ],
     } : {}),
@@ -1877,6 +1877,28 @@ function withoutClaudeTasks(shown: string[], hintEnds: (lines: string[], end: nu
   return end < shown.length && hintEnds(shown, end) ? shown.slice(0, end) : shown;
 }
 
+/** The rule below an OmO form or composer, then extension task status and the native footer. */
+function omoFooterIsActive(lines: string[]): boolean {
+  let rules = 0;
+  let footer = 0;
+  let widget = false;
+  for (const line of lines) {
+    if (!line) continue;
+    if (SOLID_RULE_RE.test(line)) {
+      if (rules > 0 || footer > 0) return false;
+      rules = 1;
+    } else if (rules > 0 && footer === 0 && (
+      /^(?:[▶◌✗✓] .*\bcategory:|▶ .* \bwave \d+\/\d+\b)/.test(line)
+      || (widget && /^(?:\d+[hms]\s*)+$/.test(line))
+    )) {
+      // A duration may wrap off the task row. Only these status rows precede the native footer;
+      // arbitrary output, a second rule, or another program's input still invalidates the form.
+      widget = true;
+    } else if (rules === 0 || ++footer > OMO_FOOTER_LINES || OMO_NOT_FOOTER_RE.test(line)) return false;
+  }
+  return rules === 1;
+}
+
 function promptTailIsActive(prompt: ParsedPrompt, screen: string): boolean {
   const cleanLines = screen.replace(ANSI_RE, "").split(/\r?\n/).map(cleanLine);
   const visible = cleanLines.filter((line) => line && !isDivider(line));
@@ -1909,8 +1931,8 @@ function promptTailIsActive(prompt: ParsedPrompt, screen: string): boolean {
   if (prompt.responder === "claude-effort") return ends(CLAUDE_EFFORT_HINT_RE);
   if (prompt.responder === "codex-model") return ends(/(?:^|\s)enter select\s*·\s*esc back$|(?:^|\s)enter (?:default|apply)\s*·\s*s session\s*·\s*esc back$/i);
   if (prompt.responder === "omo-question" || prompt.responder === "omo-review" || prompt.responder === "omo-typing") {
-    // The form is live only with nothing but OmO's own footer under its hint: blank lines, one
-    // rule, then the footer's few lines (cwd, context, model). Anything else is the form's text
+    // The form is live only with OmO's footer and extension status under its hint: blank lines, one
+    // rule, status widgets, then the footer's few lines (cwd, context, model). Anything else is the form's text
     // in another program (printed in a shell, quoted in a transcript over an input box), where
     // an answer's keys would be typed into that program.
     const hint = { "omo-question": OMO_OPTIONS_HINT_RE, "omo-review": OMO_REVIEW_HINT_RE, "omo-typing": OMO_TYPING_HINT_RE }[prompt.responder];
@@ -1919,33 +1941,15 @@ function promptTailIsActive(prompt: ParsedPrompt, screen: string): boolean {
     let end = at;
     while (end < at + OMO_HINT_LINES && !OMO_HINT_END_RE.test(cleanLines.slice(at, end + 1).join(" ").trim())) end += 1;
     if (end >= at + OMO_HINT_LINES) return false;
-    let rules = 0;
-    let footer = 0;
-    for (const line of cleanLines.slice(end + 1)) {
-      if (!line) continue;
-      if (SOLID_RULE_RE.test(line)) {
-        if (rules > 0 || footer > 0) return false;
-        rules = 1;
-      } else if (rules === 0 || ++footer > OMO_FOOTER_LINES || OMO_NOT_FOOTER_RE.test(line)) return false;
-    }
-    return rules === 1;
+    return omoFooterIsActive(cleanLines.slice(end + 1));
   }
   if (prompt.responder === "omo-pending") {
     // The widget is live over OmO's input box, other widgets maybe between them: the box (a rule,
-    // the box's line, empty, a rule) and then nothing but OmO's footer.
+    // the box's line, empty, a rule) and then OmO's extension status and native footer.
     const at = findLastIndex(cleanLines, (line, index) => line !== "" && OMO_PENDING_HINT_RE.test(wrapped(cleanLines, index)));
     const box = cleanLines.findIndex((line, index) => index > at && OMO_EMPTY_BOX_RE.test(line));
     if (at < 0 || box < 0 || box - at > 60 || !cleanLines[box - 1]!.startsWith("─")) return false;
-    let rules = 0;
-    let footer = 0;
-    for (const line of cleanLines.slice(box + 1)) {
-      if (!line) continue;
-      if (SOLID_RULE_RE.test(line)) {
-        if (rules > 0 || footer > 0) return false;
-        rules = 1;
-      } else if (rules === 0 || ++footer > OMO_FOOTER_LINES || OMO_NOT_FOOTER_RE.test(line)) return false;
-    }
-    return rules === 1;
+    return omoFooterIsActive(cleanLines.slice(box + 1));
   }
   // pi keeps its footer under every dialog — the pane's folder, then its context meter — so the
   // hint sits near the end without being it. A dialog already answered leaves its hint far
@@ -2649,10 +2653,19 @@ export function parseFallbackPrompt(agent: string, screen: string): InteractiveP
     }, steadyFields(question, body, steady.read)));
   }
   if (selectionMenu) {
-    const above = shown.filter((index) => index < selectionMenu.start).map((index) => cleanLine(lines[index]!));
     // the selector's own heading: the block of lines right above its rows, never an earlier question
     let headEnd = selectionMenu.start;
     while (headEnd > 0 && (!cleanLine(lines[headEnd - 1]!) || isDivider(lines[headEnd - 1]!))) headEnd -= 1;
+    // GJC's question dialog has its own opening border before the title. The transcript and
+    // ticking status above it do not belong to this asking. Its outer borders are unindented
+    // and identical; Markdown title rules have left padding. Keep every title paragraph inside,
+    // including approval details; without the matching frame keep the whole screen.
+    const closing = lines[findLastIndex(lines, (line) => Boolean(line.trim()))]?.trimEnd();
+    const border = closing && isDivider(closing) && !/^\s/.test(closing)
+      ? findLastIndex(lines.slice(0, headEnd), (line) => line.trimEnd() === closing)
+      : -1;
+    const dialogShown = border < 0 ? shown : shown.filter((index) => index > border);
+    const above = dialogShown.filter((index) => index < selectionMenu.start).map((index) => cleanLine(lines[index]!));
     let headStart = headEnd;
     while (headStart > 0 && cleanLine(lines[headStart - 1]!) && !isDivider(lines[headStart - 1]!)) headStart -= 1;
     const heading = lines.slice(headStart, headEnd).map((line) => cleanLine(line));
@@ -2666,7 +2679,7 @@ export function parseFallbackPrompt(agent: string, screen: string): InteractiveP
       { label: "Esc", steps: keySteps([KEY.escape]) },
     ];
     const body = withoutLine(above, question);
-    return screenCard(lines, shown, steady, finishPrompt(agent, {
+    return screenCard(lines, dialogShown, steady, finishPrompt(agent, {
       kind: "menu", fallback: true, title: "Waiting for your answer", question: question ?? "The agent is waiting for your answer.",
       body,
       options: choices.map(({ label }) => ({ label, description: null })),
@@ -2978,6 +2991,13 @@ function claudeGreyInput(ansi: string): string | null {
 }
 
 /**
+ * A labeled rule over an input box: Claude's named session (`──── my-session ─`), and OmO's own
+ * box while it works (`── • Running eval (7s • esc to interrupt) ───`), which herdr reports as
+ * Claude. Only the box reader takes the shorter lead; the task panel keeps LABELED_RULE_RE.
+ */
+const BOX_LABELED_RULE_RE = /^─{2,}\s.*─$/;
+
+/**
  * Claude Code's input box: the rows between the screen's last two rules (a named session labels
  * its rule). "clipped" when only the bottom rule is on screen, as under a draft taller than the
  * pane; null when the screen has no rule at all.
@@ -2985,7 +3005,7 @@ function claudeGreyInput(ansi: string): string | null {
 function claudeInputBox(screen: string): { plain: string[]; raw: string[] } | "clipped" | null {
   const raw = screen.split("\n").map((line) => line.replace(/\r$/, ""));
   const plain = raw.map((line) => line.replace(ANSI_RE, "").replace(/\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)/g, "").trimEnd());
-  const rule = (line: string): boolean => SOLID_RULE_RE.test(line.trim()) || LABELED_RULE_RE.test(line.trim());
+  const rule = (line: string): boolean => SOLID_RULE_RE.test(line.trim()) || BOX_LABELED_RULE_RE.test(line.trim());
   let end = plain.length - 1;
   while (end >= 0 && !rule(plain[end]!)) end--;
   if (end < 0) return null;
@@ -2993,6 +3013,19 @@ function claudeInputBox(screen: string): { plain: string[]; raw: string[] } | "c
   while (start >= 0 && !rule(plain[start]!)) start--;
   if (start < 0) return "clipped";
   return { plain: plain.slice(start + 1, end), raw: raw.slice(start + 1, end) };
+}
+
+/** Claude's new-session tip as a whole input row: `Try "how does <filepath> work?"`. */
+const CLAUDE_TIP_ROW_RE = /^Try "[^"]+"$/;
+
+/** Whether an ANSI read sets no color and no dim anywhere, as Claude Code draws under NO_COLOR. */
+function colorless(ansi: string): boolean {
+  for (const match of ansi.matchAll(/\u001b\[([0-9;:]*)m/g)) {
+    for (const code of (match[1] || "0").split(/[;:]/).map((value) => Number(value || 0))) {
+      if (code === 2 || (code >= 30 && code <= 38) || (code >= 40 && code <= 48) || (code >= 90 && code <= 97) || (code >= 100 && code <= 107)) return false;
+    }
+  }
+  return true;
 }
 
 /**
@@ -3016,6 +3049,9 @@ export function claudeInputDraft(live: string, colors: string | null): boolean {
   if (colors === null) return true;
   const shown = claudeInputBox(colors);
   if (shown === null || shown === "clipped" || shown.plain.join("\n") !== box.plain.join("\n")) return true;
+  // Under NO_COLOR (#926) the tip is not dim: only its exact form as the box's whole one row, on a
+  // screen drawn without any color, tells it from typed words. Typed `Try "…"` reads the same there.
+  if (box.plain.length === 1 && CLAUDE_TIP_ROW_RE.test(box.plain[0]!.slice(1).replace(/\u00a0/g, " ").trim()) && colorless(colors)) return false;
   let prompt = false;
   let first = true;
   let cursor = false;
@@ -3066,6 +3102,30 @@ export function claudeClearableDraft(live: string, colors: string | null): strin
   if (shown === null || shown === "clipped" || shown.raw.length !== 1 || rowText(shown.raw[0]!) !== row) return null;
   const draft = row.slice(1).replace(/^[ \u00a0]/, "");
   return draft.trim() === "" ? null : draft;
+}
+
+/** How much of the box an input_draft refusal shows: enough to tell a draft from Claude's own text. */
+export const INPUT_BOX_SHOWN_CHARS = 200;
+
+/**
+ * The live input box (claudeInputBox) as plain text, whole: what a refusal that names no clearable
+ * draft records, so a send anyway goes only over exactly that box. null when no box could be read
+ * whole (none on screen, or clipped by the pane): such a box cannot be compared, so nothing is sent over it.
+ */
+export function claudeInputBoxContent(live: string): string | null {
+  const box = claudeInputBox(live);
+  if (box === null || box === "clipped") return null;
+  return box.plain.map((row) => row.replace(/\u00a0/g, " ").trimEnd()).join("\n").trim();
+}
+
+/** What the user is shown of a box's content: enough to tell a real draft from a box misread. */
+export function shownInputBox(content: string): string {
+  return content.length > INPUT_BOX_SHOWN_CHARS ? `${content.slice(0, INPUT_BOX_SHOWN_CHARS)}…` : content;
+}
+
+/** The live input box as a refusal shows it (claudeInputBoxContent, cut by shownInputBox). */
+export function claudeInputBoxText(live: string): string {
+  return shownInputBox(claudeInputBoxContent(live) ?? "");
 }
 
 /**
@@ -3211,8 +3271,8 @@ async function liveScreen(paneId: string): Promise<string> {
   return (await paneRead({ paneId, source: "detection", format: "text" })).text;
 }
 
-/** omo's form or its widget on a screen, by a line of its key hint: worth a look in the pane's session. */
-const OMO_FORM_RE = /\b1-9 select\b|enter save and next|\btab next question\b|\bor just type your reply\b/;
+/** omo's form or widget hint: a narrow pane wraps it, including between "just" and "type". */
+const OMO_FORM_RE = /\b1-9\s+select\b|enter\s+save\s+and\s+next|\btab\s+next\s+question\b|\bor\s+just\s+type\s+your\s+reply\b/;
 const omoAskReader = new OmoAskReader();
 
 /** Resolve the live process tree every time: a cached session can outlive its agent. */

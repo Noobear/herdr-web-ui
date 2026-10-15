@@ -70,11 +70,7 @@ export function pruneSidebarPins(keys: readonly string[], liveKeys: ReadonlySet<
   return keys.filter((key) => liveKeys.has(key) || (pinMachineId(key) !== null && loading.has(pinMachineId(key)!)));
 }
 
-/**
- * Pinned rows in their saved order, and the other rows in the source roster order. With workspace
- * cards, grouping `pinned` then `rest` keeps each pinned row in its own card, first there, and puts
- * the cards that hold pins first, in the order of their first pin.
- */
+/** Pinned rows in their saved order, and the other rows in the source roster order. */
 export function splitPinnedRows<T>(rows: readonly T[], keys: readonly string[], keyOf: (row: T) => string): { pinned: T[]; rest: T[] } {
   const byKey = new Map(rows.map((row) => [keyOf(row), row]));
   const pinned = keys.flatMap((key) => {
