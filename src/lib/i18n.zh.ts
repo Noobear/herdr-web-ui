@@ -10,13 +10,6 @@
  * Placeholders in braces keep their English names.
  */
 export const ZH: Record<string, string> = {
-  "Find in messages": "在消息中查找",
-  "Match case": "区分大小写",
-  "Search earlier messages": "搜索更早的消息",
-  "Cancel search": "取消搜索",
-  "Searching earlier messages…": "正在搜索更早的消息…",
-  "Matches in loaded message source, including folded content.": "在已加载的消息原文中查找，包括折叠的内容。",
-  "Matching source": "匹配的原文",
   "Antigravity chat is unavailable. Open Terminal to see activity and tool calls.": "Antigravity 聊天暂不可用。请打开终端查看运行状态和工具调用。",
   "Chat read timed out.": "读取对话超时。",
   "Thinking…": "思考中…",
@@ -71,6 +64,8 @@ export const ZH: Record<string, string> = {
   "Catppuccin": "Catppuccin",
   "Pin agent": "固定 Agent",
   "Unpin agent": "取消固定 Agent",
+  "Pin workspace": "固定工作区",
+  "Unpin workspace": "取消固定工作区",
   "Pinned": "已固定",
   "Message from another session: {name}": "来自另一个会话的消息：{name}",
   "Message from another session": "来自另一个会话的消息",
@@ -536,6 +531,7 @@ export const ZH: Record<string, string> = {
   "Questions": "问题列表",
   "(answered)": "(已回答)",
   "Agent is asking": "Agent 提问",
+  "View plan": "查看计划",
   "input needed": "需要输入",
   "Codex keeps working meanwhile. Answer here; the question holds the terminal's input until it is answered or closed.": "Codex 会在此期间继续工作。请在此处回答。在回答或关闭之前，此问题会占用终端的输入。",
   "Codex keeps working meanwhile. Answer here; the message box still talks to Codex.": "Codex 会在此期间继续工作。请在此处回答。消息输入框仍会发送给 Codex。",
@@ -888,6 +884,7 @@ export const ZH: Record<string, string> = {
   "Send to the terminal": "发送到终端",
   "Finishing the word…": "正在完成输入…",
   "Finish the word, then send.": "请先完成输入，再发送。",
+  "Not sent. Send it again.": "未发送。请再次发送。",
   "Not sent: the terminal is disconnected.": "未发送：终端已断开连接。",
   "Not sent: the terminal is not ready for keys.": "未发送：终端尚未准备好接收按键。",
   "Not sent: the terminal is not ready, and a password is never held for later.": "未发送：终端尚未就绪，密码不会被保留以供稍后发送。",

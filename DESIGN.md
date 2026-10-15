@@ -497,9 +497,12 @@ One set for both themes: the card is island black wherever it shows.
   worktree actions, and Expand/Collapse for a group. Dismissal restores the prior focus. The
   explicit `⋯` uses those same actions at its button. An edited name keeps the browser's paste menu;
   touch long press still reorders. Agents and PC headers keep the browser's context menu.
-  An agent row selects its pane. Its `⋯` (shown as a workspace row's is: on hover, focus,
-  selection, an open menu, and always on touch) opens its menu with one item, Pin agent or Unpin
-  agent; a right-click opens the same menu at the pointer and leaves the focus where it was.
+  An agent row selects its pane. Its `⋯` (drawn as a workspace row's is) opens its menu with one
+  item, Pin agent or Unpin agent; a right-click opens the same menu at the pointer and leaves the
+  focus where it was.
+  A desktop (`pointer: fine` wider than 768px, the tab strip's rule) draws no row `⋯`: a
+  right-click or the context-menu key opens the menu, at the pointer or at the row, and dismissal
+  returns the focus where it was.
 
 - Close follows herdr's `ui.confirm_close`: a workspace close, or a pane close that takes its
   workspace with it, asks in a confirm first. A busy pane also asks before it stops. After a
@@ -602,9 +605,11 @@ One set for both themes: the card is island black wherever it shows.
   share the existing combined machine roster and its SSE updates; neither adds a status subscription.
   A disconnected PC's saved workspace and agent rows are dimmed, inert and draw no state until that PC reconnects.
 - The Agents list is flat and every row names its own place. Pinned agents (pinned from a row's
-  menu) stand first, in the order they were pinned, under a **Pinned** head in `--text-dim`
-  `--fs-xs` aligned with the rows' titles; the rest follow `--space-2` below in the chosen order,
-  with no head. Without pins there is no head. Pins are shared with the other browsers of the server.
+  menu) stand first, in the order they were pinned, in a card (a `--hairline` `--border` edge,
+  `--radius-lg`, `--space-1` padding, no fill, so hover and selection read inside it as elsewhere),
+  each with a `--space-3` `--accent` pin after its title; the rest follow `--space-2` below in the
+  chosen order. The Agents head is the only head (the pinned list is labelled **Pinned** for screen
+  readers); without pins there is no card. Pins are shared with the other browsers of the server.
 - Appearance's **Sidebar rows** is **Two lines** by default; on **One line** a workspace row is
   its name. Two lines draws the row as the roster did before it was one line, on an agent row's
   height and type: the title of the pane the row opens, and under it in `--text-dim` `--fs-xs` the place,
@@ -631,9 +636,16 @@ One set for both themes: the card is island black wherever it shows.
   where it lands. Alt+Up/Down moves the focused row one step at a time.
   Dragging is disabled while a name field is open. Each workspace's `⋯` opens its row menu
   (`.row-menu-toggle`: no width at rest; shown on hover, focus, selection and while its menu is
-  open; always on touch). Inline server failures
+  open; always on touch; not drawn on a desktop, where a right-click opens the menu). Inline server failures
   stay beside their workspace. A repository's workspace moves past the
   next or previous group with its worktrees, and a worktree moves among its siblings only.
+- A workspace is pinned from its row menu (**Pin workspace** / **Unpin workspace**, first in the
+  menu), as Paseo pins a chat: pinned workspaces leave their place and stand first in their PC's
+  list, in the order they were pinned, in the Agents list's card (`.sidebar-pinned`) with the same
+  `--accent` pin after the name. A pinned repository's workspace brings its worktrees; a pinned
+  worktree leaves its repository's group, which stays. Pinned rows are not dragged and `Alt+↑/↓`
+  does not move them; the rest reorder among the rows they show. The pins are the Agents list's
+  shared list (a workspace's key is `machine:workspace:id`), so other browsers of the server see them.
 - A title that is a working directory written out (`/home/me/dev/api`, `~/dev/api`, `C:\work\api`)
   shows as its last folder, here, in the header, the palette and every alert; the full path stays
   in the row's tooltip. Parent workspace names stay fixed and linked checkouts are named by branch;
@@ -857,15 +869,7 @@ One set for both themes: the card is island black wherever it shows.
   The web ESM patch orders pooled DOM slots before paint, uses state-preserving
   `moveBefore` where available, and clears stale prepend locks on explicit navigation.
   These changes preserve native drag/copy order and prevent a later layout from undoing
-  Find navigation; the React Native and keyboard patches from t3code are not included.
-- The chat-local **Find in messages** button and Mod+F search supplied message source,
-  including folded work, rather than the mounted DOM window. The existing Mod+Shift+F
-  terminal action remains unchanged. The panel takes its own space above the transcript,
-  never covering a match, with existing search controls and `--accent-tint` match emphasis. A selectable
-  source excerpt makes a match in folded content readable without expanding every tool.
-  **Search earlier messages** reads older pages sequentially until a new match or the
-  beginning; Cancel stops further pages. The scope label distinguishes loaded source from
-  history that has not been read. Escape closes the panel and restores its button's focus.
+  a jump to a turn; the React Native and keyboard patches from t3code are not included.
 - The chat lens is a centered `--chat-w` transcript over the still-attached terminal surface.
   At the Default chat width the lane follows the pane: min 820px, max 60rem (960px at a 16px
   root), 71% of the pane (`.terminal-stack`) between. `PaneTerminal` measures the pane and writes

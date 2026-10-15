@@ -1462,8 +1462,7 @@ try {
   const repoRow = workspaceHeader(repoWorkspace.workspace.workspace_id);
   await repoRow.waitFor();
   // herdr has not marked this workspace as a repository's yet: its row is where the first worktree starts
-  await repoRow.hover();
-  await repoRow.locator(".row-menu-toggle").click();
+  await repoRow.locator(".workspace-select").click({ button: "right" });
   const unmarkedRepoMenu = page.getByRole("menu");
   await unmarkedRepoMenu.getByRole("menuitem", { name: "New worktree", exact: true }).waitFor();
   await page.keyboard.press("Escape");
@@ -1504,12 +1503,11 @@ try {
   await repoRow.locator(".workspace-select").click();
   await repoRow.locator(".workspace-toggle").click();
   await initialRow.waitFor({ state: "detached" });
-  await repoRow.hover();
-  await repoRow.locator(".row-menu-toggle").click();
+  await repoRow.locator(".workspace-select").click({ button: "right" });
   const repoMenu = page.getByRole("menu");
   await repoMenu.waitFor();
   const repoActions = await repoMenu.getByRole("menuitem").allTextContents();
-  assert.deepEqual(repoActions, ["Rename workspace", "Close group", "New worktree", "Open worktree…", "Expand"],
+  assert.deepEqual(repoActions, ["Pin workspace", "Rename workspace", "Close group", "New worktree", "Open worktree…", "Expand"],
     "a folded repository group has native workspace and worktree actions");
   await page.keyboard.press("Escape");
   await repoMenu.waitFor({ state: "detached" });
@@ -1557,8 +1555,7 @@ try {
   assert.equal(await childHeader.locator(".worktree-workspace-label").textContent(), "browser/sidebar", "a pre-create inventory cannot erase the new branch");
   assert.equal(await childHeader.locator(".workspace-name").textContent(), "Sidebar redesign", "nor the name it was given");
   await page.unroute("**/api/worktree/list?*");
-  await childHeader.hover();
-  await childHeader.locator(".row-menu-toggle").click();
+  await childHeader.locator(".workspace-select").click({ button: "right" });
   await page.getByRole("menuitem", { name: "Rename workspace", exact: true }).click();
   const worktreeRename = childHeader.getByRole("textbox", { name: "Workspace name", exact: true });
   assert.equal(await childHeader.locator(".workspace-select").getAttribute("draggable"), "false", "an editing field disables row dragging");
@@ -1633,21 +1630,33 @@ try {
   assert.equal(moves.length, sent, "a lone worktree has nowhere to move");
   await page.unroute("**/api/workspace/move");
   writeFileSync(join(worktree.path, "unsaved.txt"), "dirty\n");
-  await childHeader.hover();
-  await childHeader.locator(".row-menu-toggle").click();
+  // a desktop draws no row ⋯: the context-menu key opens the menu at the focused row
+  await childHeader.locator(".workspace-select").focus();
+  await page.keyboard.press("Shift+F10");
   const childMenu = page.getByRole("menu");
   await childMenu.waitFor();
   const childActions = await childMenu.getByRole("menuitem").allTextContents();
-  assert.deepEqual(childActions, ["Rename workspace", "Close workspace", "Delete worktree checkout…"], "a worktree workspace's menu");
+  assert.deepEqual(childActions, ["Pin workspace", "Rename workspace", "Close workspace", "Delete worktree checkout…"], "a worktree workspace's menu");
   await page.keyboard.press("Escape");
   await childMenu.waitFor({ state: "detached" });
   await childHeader.locator(".workspace-select").click({ button: "right" });
   await childMenu.waitFor();
   assert.deepEqual(await childMenu.getByRole("menuitem").allTextContents(), childActions,
-    "a linked checkout's explicit menu and right-click menu have identical actions");
+    "a linked checkout's keyboard menu and right-click menu have identical actions");
   await page.keyboard.press("Escape");
   await childMenu.waitFor({ state: "detached" });
-  await childHeader.locator(".row-menu-toggle").click();
+  // pinned, the worktree leaves its repository's group for the pinned card at the top; unpinned, it returns
+  await childHeader.locator(".workspace-select").click({ button: "right" });
+  await childMenu.getByRole("menuitem", { name: "Pin workspace", exact: true }).click();
+  const pinnedCard = page.locator(".workspace-list-pinned");
+  await pinnedCard.locator(`.workspace-group[data-workspace="${worktree.workspace_id}"]`).waitFor();
+  assert.equal(await page.locator(`.worktree-children .workspace-group[data-workspace="${worktree.workspace_id}"]`).count(), 0, "a pinned worktree leaves its group");
+  assert.equal(await pinnedCard.locator(".sidebar-pin-mark").count(), 1, "the pinned row carries its pin");
+  await pinnedCard.locator(`.workspace-group[data-workspace="${worktree.workspace_id}"] .workspace-select`).click({ button: "right" });
+  await childMenu.getByRole("menuitem", { name: "Unpin workspace", exact: true }).click();
+  await pinnedCard.waitFor({ state: "detached" });
+  await childRow.waitFor();
+  await childHeader.locator(".workspace-select").click({ button: "right" });
   await childMenu.waitFor();
   await childMenu.getByRole("menuitem", { name: "Delete worktree checkout…", exact: true }).click();
   const deleteConfirm = page.getByRole("alertdialog");
@@ -2202,18 +2211,22 @@ try {
   // is automatic, so it must not offer a sign-out action that cannot lock the app.
   assert.equal(await page.getByRole("button", { name: "Sign out", exact: true }).count(), 0);
   await page.locator(`.pane-select[title^="${created.pane_id} —"]`).click();
-  // closed from the row's ⋯ menu; the workspace's pane goes with it, so a confirm asks first
-  await page.locator(".pane-item.is-selected .row-menu-toggle").click();
+  // closed from the row's menu, which a desktop opens with the context-menu key or a right-click
+  // (it draws no row ⋯); the workspace's pane goes with it, so a confirm asks first
+  const selectedRow = page.locator(".pane-item.is-selected .pane-select");
+  assert.equal(await page.locator(".pane-item.is-selected .row-menu-toggle").isVisible(), false, "a desktop draws no row ⋯");
+  await selectedRow.focus();
+  await page.keyboard.press("Shift+F10");
   const rowMenu = page.getByRole("menu");
   await rowMenu.waitFor();
   const rowActions = await rowMenu.getByRole("menuitem").allTextContents();
-  assert.deepEqual(rowActions, ["Rename workspace", "Close workspace"], "the workspace menu keeps workspace scope");
-  // Escape puts the menu away and the focus back on its button; Enter there opens it again
+  assert.deepEqual(rowActions, ["Pin workspace", "Rename workspace", "Close workspace"], "the workspace menu keeps workspace scope");
+  // Escape puts the menu away and the focus back on the row
   await page.keyboard.press("Escape");
   await rowMenu.waitFor({ state: "detached" });
-  assert.equal(await page.evaluate(() => document.activeElement?.classList.contains("row-menu-toggle") ?? false), true, "Escape returns focus to the row's ⋯");
+  assert.equal(await selectedRow.evaluate((row) => document.activeElement === row), true, "Escape returns focus to the row");
   // A right-click opens the same menu at the pointer without changing the selection.
-  await page.locator(".pane-item.is-selected .pane-select").click({ button: "right" });
+  await selectedRow.click({ button: "right" });
   await rowMenu.waitFor();
   assert.equal(await page.locator(".pane-item.is-selected .row-menu-toggle").getAttribute("aria-expanded"), "true", "a right-click opens the row's own menu");
   assert.deepEqual(await rowMenu.getByRole("menuitem").allTextContents(), rowActions, "both workspace menu entry points have identical actions and order");
@@ -2221,19 +2234,19 @@ try {
   await until(async () => await page.evaluate(() => document.activeElement?.getAttribute("role") === "menuitem"), "the menu takes the focus");
   await page.keyboard.press("Escape");
   await rowMenu.waitFor({ state: "detached" });
-  assert.equal(await page.evaluate(() => document.activeElement?.classList.contains("row-menu-toggle") ?? false), true, "Escape after a right-click returns focus to the row's ⋯");
-  await page.keyboard.press("Enter");
+  assert.equal(await selectedRow.evaluate((row) => document.activeElement === row), true, "Escape after a right-click returns focus to the row");
+  await page.keyboard.press("Shift+F10");
   await rowMenu.getByRole("menuitem", { name: "Close workspace", exact: true }).click();
   const confirmClose = page.getByRole("alertdialog");
   await confirmClose.waitFor();
   await until(async () => await page.evaluate(() => document.activeElement?.textContent === "Cancel"), "the confirm starts on Cancel");
-  // a no gives the focus back to the row's ⋯; Tab stays inside the confirm
+  // a no gives the focus back to the row; Tab stays inside the confirm
   await page.keyboard.press("Tab");
   assert.equal(await page.evaluate(() => document.activeElement?.textContent), "Close", "Tab moves to the confirm's action");
   await page.keyboard.press("Escape");
   await confirmClose.waitFor({ state: "detached" });
-  assert.equal(await page.evaluate(() => document.activeElement?.classList.contains("row-menu-toggle") ?? false), true, "cancelling the confirm returns focus to the row's ⋯");
-  await page.keyboard.press("Enter");
+  assert.equal(await selectedRow.evaluate((row) => document.activeElement === row), true, "cancelling the confirm returns focus to the row");
+  await page.keyboard.press("Shift+F10");
   await rowMenu.getByRole("menuitem", { name: "Close workspace", exact: true }).click();
   await confirmClose.waitFor();
   await confirmClose.getByRole("button", { name: "Close", exact: true }).click();

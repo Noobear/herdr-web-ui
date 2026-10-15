@@ -6,13 +6,6 @@
  * braces keep their English names.
  */
 export const KO: Record<string, string> = {
-  "Find in messages": "메시지에서 찾기",
-  "Match case": "대소문자 구분",
-  "Search earlier messages": "이전 메시지 검색",
-  "Cancel search": "검색 취소",
-  "Searching earlier messages…": "이전 메시지 검색 중…",
-  "Matches in loaded message source, including folded content.": "접힌 내용을 포함해 불러온 메시지 원문에서 찾습니다.",
-  "Matching source": "일치하는 원문",
   "Antigravity chat is unavailable. Open Terminal to see activity and tool calls.": "Antigravity 채팅을 사용할 수 없습니다. 터미널을 열어 작업 상태와 도구 호출을 확인하세요.",
   "Chat read timed out.": "대화 읽기 시간이 초과되었습니다.",
   "Thinking…": "생각 중…",
@@ -67,6 +60,8 @@ export const KO: Record<string, string> = {
   "Catppuccin": "Catppuccin",
   "Pin agent": "에이전트 고정",
   "Unpin agent": "에이전트 고정 해제",
+  "Pin workspace": "워크스페이스 고정",
+  "Unpin workspace": "워크스페이스 고정 해제",
   "Pinned": "고정됨",
   "Message from another session: {name}": "다른 세션에서 온 메시지: {name}",
   "Message from another session": "다른 세션에서 온 메시지",
@@ -532,6 +527,7 @@ export const KO: Record<string, string> = {
   "Questions": "질문 목록",
   "(answered)": "(답함)",
   "Agent is asking": "에이전트의 질문",
+  "View plan": "계획 보기",
   "input needed": "입력 필요",
   "Codex keeps working meanwhile. Answer here; the question holds the terminal's input until it is answered or closed.": "Codex는 그동안 계속 작업합니다. 여기서 답하세요. 답하거나 닫기 전까지 이 질문이 터미널 입력을 붙들고 있습니다.",
   "Codex keeps working meanwhile. Answer here; the message box still talks to Codex.": "Codex는 그동안 계속 작업합니다. 여기서 답하세요. 메시지 입력창은 그대로 Codex에게 갑니다.",
@@ -884,6 +880,7 @@ export const KO: Record<string, string> = {
   "Send to the terminal": "터미널로 보내기",
   "Finishing the word…": "단어를 마무리하는 중…",
   "Finish the word, then send.": "단어 입력을 마친 뒤 보내세요.",
+  "Not sent. Send it again.": "보내지 못했습니다. 다시 보내세요.",
   "Not sent: the terminal is disconnected.": "보내지 못했습니다: 터미널 연결이 끊겼습니다.",
   "Not sent: the terminal is not ready for keys.": "보내지 못했습니다: 터미널이 아직 키를 받을 준비가 되지 않았습니다.",
   "Not sent: the terminal is not ready, and a password is never held for later.": "보내지 못했습니다: 터미널이 아직 준비되지 않았고, 비밀번호는 나중을 위해 보관하지 않습니다.",

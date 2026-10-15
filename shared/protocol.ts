@@ -1019,6 +1019,8 @@ export interface InteractivePrompt {
   /** a model list that narrows as text is typed into it (pi's and OmO's /model): what its filter
    * line holds now. The card offers a search box over the rows, which types into that line */
   filter?: { text: string };
+  /** Claude's plan file behind a plan card, whose whole text is then the body: opened in the file viewer */
+  plan_file?: string;
 }
 
 export interface InteractivePromptStep {

@@ -71,8 +71,7 @@
   list.
 - Long native conversations mount a window of rows while keeping selected and focused
   rows available. Reading position survives older messages and streaming; expanded work
-  and fetched full outputs survive scrolling away. Chat Find (Cmd/Ctrl+F) searches loaded
-  source, including folded work, and can search earlier pages with cancellation and retry.
+  and fetched full outputs survive scrolling away.
 - **Files → Changes** lists what changed in the repository a pane sits in: the working tree, the
   index, or two commits named by hand, one row per file with git's status letter, the path (a
   rename's old path too) and its added and removed lines. A row opens the file's diff from

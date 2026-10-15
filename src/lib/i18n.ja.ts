@@ -8,13 +8,6 @@
  * in English. Placeholders in braces keep their English names.
  */
 export const JA: Record<string, string> = {
-  "Find in messages": "メッセージ内を検索",
-  "Match case": "大文字と小文字を区別",
-  "Search earlier messages": "以前のメッセージを検索",
-  "Cancel search": "検索をキャンセル",
-  "Searching earlier messages…": "以前のメッセージを検索中…",
-  "Matches in loaded message source, including folded content.": "折りたたまれた内容を含む、読み込み済みメッセージの原文を検索します。",
-  "Matching source": "一致する原文",
   "Antigravity chat is unavailable. Open Terminal to see activity and tool calls.": "Antigravityのチャットを利用できません。ターミナルを開いて動作状況とツール呼び出しを確認してください。",
   "Chat read timed out.": "会話の読み込みがタイムアウトしました。",
   "Thinking…": "思考中…",
@@ -69,6 +62,8 @@ export const JA: Record<string, string> = {
   "Catppuccin": "Catppuccin",
   "Pin agent": "エージェントを固定",
   "Unpin agent": "エージェントの固定を解除",
+  "Pin workspace": "ワークスペースを固定",
+  "Unpin workspace": "ワークスペースの固定を解除",
   "Pinned": "固定済み",
   "Message from another session: {name}": "別のセッションからのメッセージ: {name}",
   "Message from another session": "別のセッションからのメッセージ",
@@ -534,6 +529,7 @@ export const JA: Record<string, string> = {
   "Questions": "質問一覧",
   "(answered)": "(回答済み)",
   "Agent is asking": "エージェントからの質問",
+  "View plan": "プランを表示",
   "input needed": "入力が必要",
   "Codex keeps working meanwhile. Answer here; the question holds the terminal's input until it is answered or closed.": "その間も Codex は作業を続けます。ここで回答してください。回答するか閉じるまで、この質問がターミナルの入力を占有します。",
   "Codex keeps working meanwhile. Answer here; the message box still talks to Codex.": "その間も Codex は作業を続けます。ここで回答してください。メッセージ入力欄はそのまま Codex に送られます。",
@@ -886,6 +882,7 @@ export const JA: Record<string, string> = {
   "Send to the terminal": "ターミナルに送信",
   "Finishing the word…": "単語を確定しています…",
   "Finish the word, then send.": "単語を確定してから送信してください。",
+  "Not sent. Send it again.": "送信できませんでした。もう一度送信してください。",
   "Not sent: the terminal is disconnected.": "未送信: ターミナルが切断されています。",
   "Not sent: the terminal is not ready for keys.": "未送信: ターミナルはまだキー入力を受け付けていません。",
   "Not sent: the terminal is not ready, and a password is never held for later.": "未送信: ターミナルの準備ができておらず、パスワードは後のために保持されません。",
