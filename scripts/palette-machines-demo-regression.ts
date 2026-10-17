@@ -108,6 +108,7 @@ try {
       try {
         await context.addInitScript((paneId) => {
           localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en" }));
+          localStorage.setItem("herdr-web-ui:recent-directories:local", JSON.stringify(["/fixture/project"]));
           for (const id of ["local", "remote", "offline"]) localStorage.setItem(`herdr-web-ui:pc-collapsed:${id}`, "1");
           localStorage.setItem("herdr-web-ui:recent-panes:remote", JSON.stringify([paneId]));
         }, panes.api);
@@ -135,6 +136,27 @@ try {
         assert.ok(await rows.count() > 0);
         assert.deepEqual(await rows.evaluateAll((entries) => [...new Set(entries.map((entry) => entry.getAttribute("data-machine")))]), ["remote"]);
         console.log("PASS global search distinguishes duplicate IDs, searches machine/branch names and migrates remote history");
+
+        await page.evaluate(() => {
+          const fetchDemo = window.fetch;
+          let attempts = 0;
+          Object.assign(window, { fetch: (input: RequestInfo | URL, init?: RequestInit) => {
+            if (String(input).includes("/workspace/directories")) {
+              return Promise.resolve(++attempts === 1
+                ? new Response(JSON.stringify({ error: "fixture_failure" }), { status: 500 })
+                : new Response(JSON.stringify({ path: "/", parent: null, home: "/home/fixture", directories: ["recovered"], truncated: false })));
+            }
+            return fetchDemo(input, init);
+          } });
+        });
+        await search.fill("/");
+        await palette.getByRole("button", { name: "Try again", exact: true }).waitFor();
+        assert.ok(await palette.locator(".palette-folder").count() > 0, "cached folder rows remain alongside the listing failure");
+        assert.equal(await palette.locator(".palette-empty[role=status]").textContent(), "Folders could not be loaded.");
+        await palette.getByRole("button", { name: "Try again", exact: true }).click();
+        await palette.getByRole("option", { name: "recovered", exact: true }).waitFor();
+        assert.equal(await palette.getByRole("button", { name: "Try again", exact: true }).count(), 0, "retry fetches the unchanged query and clears its failure");
+        console.log("PASS a failed folder listing stays visible and retryable beside cached folder rows");
 
         // The palette may open over a confirmation. Identical native IDs on the destination
         // PC must never retarget the first PC's destructive dialog to that new machine.

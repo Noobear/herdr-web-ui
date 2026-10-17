@@ -234,13 +234,14 @@
   color: var(--accent);
 }
 
-/* while an answer is on its way every option waits, the checkbox rows included */
-.prompt-card[aria-busy="true"] .prompt-card-option {
+/* while an answer is on its way every option waits, the checkbox rows included (the busy state is
+   the options group's own, so the card's status line stays outside it) */
+.prompt-card-options[aria-busy="true"] .prompt-card-option {
   opacity: 0.55;
   cursor: default;
 }
 
-.prompt-card[aria-busy="true"] .prompt-card-option:hover {
+.prompt-card-options[aria-busy="true"] .prompt-card-option:hover {
   background: transparent;
 }
 
@@ -389,6 +390,20 @@
 .prompt-card-error {
   color: var(--status-blocked);
   font-size: var(--fs-xs);
+}
+
+/* an answer on its way: said under the actions, so a slow PC never looks like a dead button */
+.prompt-card-status {
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+}
+
+/* the chips' and rows' colour changes snap instead of fading */
+@media (prefers-reduced-motion: reduce) {
+  .prompt-card-step,
+  .prompt-card-option {
+    transition: none;
+  }
 }
 
 /* a desktop always shows the tab strip (as herdr's TUI): the card's 60% is of what is under it,

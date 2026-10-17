@@ -28,6 +28,9 @@ to change. Also read [server/AGENTS.md](server/AGENTS.md) and [src/AGENTS.md](sr
 - Selecting a pane or tab in the browser never moves herdr's own focus; only an explicit action
   that needs it calls `pane.focus`.
 - Never edit `shared/herdr-api.generated.ts`; run `bun run generate:types`.
+- Theme colors are edited only in the theme blocks of `src/styles.css`. Never edit
+  `src/lib/themes.generated.ts` or the generated copies in DESIGN.md, index.html and
+  `public/manifest.webmanifest`; run `bun run generate:themes`.
 
 ## Tests and QA
 - Tests never touch the user's herdr session or real state: they use the isolated test session,
@@ -36,6 +39,16 @@ to change. Also read [server/AGENTS.md](server/AGENTS.md) and [src/AGENTS.md](sr
 - Screenshots and recordings come from the demo or a test session, never the user's live one.
 
 ## Maintainer workflow
+- A session that changes code, in any harness, stops at an open PR: only the maintainer's merge
+  pass merges, unless the maintainer asks that session to merge. One session that edits files per
+  worktree; read-only sessions may share it.
+- A worktree an agent adds with `git worktree add` that outlives its session (an open PR) goes
+  under `~/.herdr/worktrees/herdr-web-ui-wt/`, named after its branch with `/` as `-`
+  (`fix/pin-order` in `herdr-web-ui-wt/fix-pin-order`); a short-lived one may stay in the run's
+  temp root, and skills that name their own path keep it. Once its PR merges, remove the
+  worktree and its branch.
+- Everything written to git and GitHub (commits, branches, PRs, reviews, issues, changelog
+  fragments) is in English.
 - Never push a `v*` tag by hand: installed updaters act on tags alone.
 - Required checks: Fast checks, Integration and browser, Native Windows install. Resolve review
   threads before merging (branch protection does not enforce it).

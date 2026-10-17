@@ -6,14 +6,15 @@
  */
 
 import type { TelemetrySettings } from "../../shared/telemetry.ts";
-import { SHARED_SETTING_KEYS, type SharedSettingKey } from "../../shared/preferences.ts";
+import { mirrorPalette, SHARED_SETTING_KEYS, type SharedSettingKey } from "../../shared/preferences.ts";
 import { createContext, createElement, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { isThemeId, terminalColors, themeColor as themeTableColor, type ThemeId, type ThemeEntry } from "./themes.ts";
 import { LANGUAGE_SETTINGS, LOCALE_TAGS, resolveLanguage, setCurrentLanguage, type Language, type LanguageSetting } from "./i18n.ts";
 import type { AlertPrefs, DoneAlerts } from "../../shared/notify-policy.ts";
 import { chatFontStack, sanitizeFontFamily } from "./fontFamily.ts";
 import { fontScale, sanitizeUiFontSize } from "./typography.ts";
 import { sanitizeKeyBarExtras, type KeyBarExtra } from "./keys.ts";
-import { paletteFor } from "./paletteFor.ts";
+import { themeFor } from "./themeFor.ts";
 import { DEFAULT_KEY_BAR_ITEMS, migrateKeyBarItems, sanitizeKeyBarItems, type KeyBarItem } from "./keyBar.ts";
 
 export type ThemeSetting = "dark" | "light" | "system";
@@ -32,7 +33,7 @@ export type UsageGlance = "week" | "session";
 /** amber: the herdr look (the default); charcoal: neutral Ghostty-style dark;
  *  catppuccin: Catppuccin Mocha in dark, Latte in light. A record naming a palette that was removed
  *  (report, lilac, forest) loads as amber. */
-export type Palette = "amber" | "charcoal" | "catppuccin";
+export type Palette = ThemeId;
 /** the chat lane's widest: the transcript, the composer column and the held list share it (--chat-w in src/styles.css).
  *  narrow: 820px; default: follows the pane, up to 60rem (chatLaneWidth); wide: 72rem; full: the pane, less the gutters */
 export type ChatWidth = "narrow" | "default" | "wide" | "full";
@@ -76,9 +77,11 @@ export interface Settings {
   statusIndicators: StatusIndicators;
   /** the chrome color family, keyed as data-palette in src/styles.css */
   palette: Palette;
-  /** System theme only: the palette drawn while the OS is light, and while it is dark (see paletteFor) */
+  /** Legacy mirrors for older app versions. */
   paletteLight: Palette;
   paletteDark: Palette;
+  darkTheme: ThemeId;
+  lightTheme: ThemeId;
   /** xterm font size in px */
   terminalFontSize: number;
   /** mouse reports sent to herdr per wheel event in the terminal: 1 is what xterm sends by itself */
@@ -223,6 +226,8 @@ export function telemetrySettingsSnapshot(settings: Settings): TelemetrySettings
     quickReplyCount: settings.quickReplies.length,
     usageHiddenCount: settings.usageHidden.length,
     usageOrderCustom: settings.usageOrder.length > 0,
+    darkTheme: settings.darkTheme,
+    lightTheme: settings.lightTheme,
   };
 }
 
@@ -232,7 +237,7 @@ export function telemetrySettingsSnapshot(settings: Settings): TelemetrySettings
  * must be placed here, or the build fails; when in doubt it is the device's.
  */
 export const SETTING_SCOPE = {
-  theme: "shared", palette: "shared", language: "shared", sidebarRows: "shared", agentOrder: "shared",
+  theme: "shared", palette: "shared", darkTheme: "shared", lightTheme: "shared", language: "shared", sidebarRows: "shared", agentOrder: "shared",
   agentMarks: "shared", autoSendQueued: "shared", showThinking: "shared", quickReplies: "shared",
   showQuickReplies: "shared", showUsage: "shared", usageCount: "shared",
   usageGlance: "shared", usageOrder: "shared", usageHidden: "shared", defaultView: "device", suggestionChip: "device",
@@ -259,13 +264,15 @@ export const DEFAULT_SETTINGS: Settings = {
   shortcutOverrides: {},
   theme: "dark",
   density: "comfortable",
-  sidebarRows: "two",
+  sidebarRows: "one",
   agentOrder: "workspace",
   agentMarks: "color",
   statusIndicators: "classic",
   palette: "amber",
   paletteLight: "amber",
   paletteDark: "amber",
+  darkTheme: "amber",
+  lightTheme: "amber",
   terminalFontSize: 13,
   terminalWheelSpeed: 1,
   terminalFontFamily: "",
@@ -338,9 +345,8 @@ export function alertPrefs(settings: Settings): AlertPrefs {
   return { input: settings.alertInput, done: settings.alertDone };
 }
 
-const PALETTES: readonly Palette[] = ["amber", "charcoal", "catppuccin"];
-
 const STORAGE_KEY = "herdr-web-ui:settings";
+const THEMES_STORAGE_KEY = "herdr-web-ui:themes";
 export const TERMINAL_FONT_MIN = 10;
 export const TERMINAL_FONT_MAX = 22;
 export const TERMINAL_WHEEL_SPEED_MIN = 1;
@@ -409,8 +415,15 @@ export function chatLaneWidth(paneWidth: number, rootFontPx: number = ROOT_FONT_
 /** Only known keys with the right type survive: a stale or hand-edited record never breaks the UI. */
 export function sanitizeSettings(raw: unknown): Settings {
   const record = typeof raw === "object" && raw !== null ? (raw as Record<string, unknown>) : {};
-  const theme = record["theme"];
-  const palette = PALETTES.find((name) => name === record["palette"]) ?? DEFAULT_SETTINGS.palette;
+  const theme = record["theme"] === "dark" || record["theme"] === "light" || record["theme"] === "system" ? record["theme"] : DEFAULT_SETTINGS.theme;
+  const palette = isThemeId(record["palette"]) ? record["palette"] : "amber";
+  // Absence migrates; an explicitly unknown id falls back to amber, not a stale pair.
+  const darkTheme = "darkTheme" in record
+    ? (isThemeId(record["darkTheme"]) ? record["darkTheme"] : "amber")
+    : theme === "dark" ? palette : isThemeId(record["paletteDark"]) ? record["paletteDark"] : theme === "system" && record["paletteDark"] !== undefined ? "amber" : palette;
+  const lightTheme = "lightTheme" in record
+    ? (isThemeId(record["lightTheme"]) ? record["lightTheme"] : "amber")
+    : theme === "light" ? palette : isThemeId(record["paletteLight"]) ? record["paletteLight"] : theme === "system" && record["paletteLight"] !== undefined ? "amber" : palette;
   const density = record["density"];
   const font = record["terminalFontSize"];
   const chatFont = record["chatFontSize"];
@@ -429,10 +442,11 @@ export function sanitizeSettings(raw: unknown): Settings {
     agentOrder: record["agentOrder"] === "workspace" || record["agentOrder"] === "activity" ? record["agentOrder"] : DEFAULT_SETTINGS.agentOrder,
     agentMarks: record["agentMarks"] === "color" || record["agentMarks"] === "mono" ? record["agentMarks"] : DEFAULT_SETTINGS.agentMarks,
     statusIndicators: record["statusIndicators"] === "classic" || record["statusIndicators"] === "dots" || record["statusIndicators"] === "symbols" ? record["statusIndicators"] : DEFAULT_SETTINGS.statusIndicators,
-    palette,
-    // a record from before the pair starts both from its one palette, so System mode looks as it did
-    paletteLight: PALETTES.find((name) => name === record["paletteLight"]) ?? palette,
-    paletteDark: PALETTES.find((name) => name === record["paletteDark"]) ?? palette,
+    darkTheme,
+    lightTheme,
+    palette: mirrorPalette(theme, darkTheme, lightTheme),
+    paletteLight: lightTheme,
+    paletteDark: darkTheme,
     terminalFontSize: typeof font === "number" && Number.isFinite(font) ? clampFont(font) : DEFAULT_SETTINGS.terminalFontSize,
     terminalWheelSpeed: typeof record["terminalWheelSpeed"] === "number" && Number.isFinite(record["terminalWheelSpeed"])
       ? Math.min(TERMINAL_WHEEL_SPEED_MAX, Math.max(TERMINAL_WHEEL_SPEED_MIN, Math.round(record["terminalWheelSpeed"])))
@@ -479,17 +493,31 @@ export function sanitizeSettings(raw: unknown): Settings {
 }
 
 export function loadSettings(): Settings {
+  let settings = DEFAULT_SETTINGS;
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
-    return raw === null ? DEFAULT_SETTINGS : sanitizeSettings(JSON.parse(raw));
+    settings = raw === null ? DEFAULT_SETTINGS : sanitizeSettings(JSON.parse(raw));
   } catch {
-    return DEFAULT_SETTINGS;
+    /* a damaged main record does not hide the protected theme choice */
   }
+  try {
+    const raw = window.localStorage.getItem(THEMES_STORAGE_KEY);
+    const themes: unknown = raw === null ? null : JSON.parse(raw);
+    if (typeof themes === "object" && themes !== null && "darkTheme" in themes && "lightTheme" in themes) {
+      return sanitizeSettings({ ...settings, darkTheme: themes.darkTheme, lightTheme: themes.lightTheme });
+    }
+  } catch { /* denied or damaged storage: keep the main record */ }
+  return settings;
 }
 
-function saveSettings(settings: Settings): void {
+export function saveSettings(settings: Settings): void {
+  const mirrored = sanitizeSettings(settings);
   try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
+    window.localStorage.setItem(THEMES_STORAGE_KEY, JSON.stringify({
+      darkTheme: mirrored.darkTheme, lightTheme: mirrored.lightTheme,
+      mirror: { palette: mirrored.palette, paletteDark: mirrored.paletteDark, paletteLight: mirrored.paletteLight },
+    }));
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(mirrored));
   } catch {
     /* private mode: preferences last for the session */
   }
@@ -504,39 +532,21 @@ export function resolveTheme(setting: ThemeSetting): ResolvedTheme {
 
 type TerminalColors = { background: string; foreground: string; cursor: string; selectionBackground: string };
 
-/** The xterm theme for a resolved theme and palette: the `--term-*` tokens of src/styles.css, verbatim. */
-const TERMINAL_THEMES: Record<Palette, Record<ResolvedTheme, TerminalColors>> = {
-  amber: {
-    light: { background: "#faf8f3", foreground: "#2a251f", cursor: "#8c5000", selectionBackground: "#f0d9ae" },
-    dark: { background: "#181613", foreground: "#d8d0c3", cursor: "#f0a830", selectionBackground: "#4a3d26" },
-  },
-  charcoal: {
-    light: { background: "#fafaf9", foreground: "#242424", cursor: "#242424", selectionBackground: "#dedad3" },
-    dark: { background: "#171717", foreground: "#cbc7c0", cursor: "#cbc7c0", selectionBackground: "#49443d" },
-  },
-  catppuccin: {
-    light: { background: "#eff1f5", foreground: "#4c4f69", cursor: "#dc8a78", selectionBackground: "#d2d4dc" },
-    dark: { background: "#1e1e2e", foreground: "#cdd6f4", cursor: "#f5e0dc", selectionBackground: "#3b3d4f" },
-  },
-};
-
 export function terminalTheme(theme: ResolvedTheme, palette: Palette = "amber"): TerminalColors {
-  return TERMINAL_THEMES[palette][theme];
+  return { ...terminalColors(palette, theme) };
 }
 
 /** `<meta name="theme-color">` follows the panel surface so the PWA title bar matches. */
-const THEME_COLOR: Record<Palette, Record<ResolvedTheme, string>> = {
-  amber: { dark: "#181613", light: "#faf8f3" },
-  charcoal: { dark: "#171717", light: "#fafaf9" },
-  catppuccin: { dark: "#181825", light: "#e6e9ef" },
-};
+export function themeColor(theme: ResolvedTheme, palette: Palette = "amber"): string {
+  return themeTableColor(palette, theme);
+}
 
-function applyToDocument(settings: Settings, resolved: ResolvedTheme, palette: Palette, language: Language): void {
+export function applyToDocument(settings: Settings, entry: ThemeEntry, language: Language): void {
   const root = document.documentElement;
   root.lang = LOCALE_TAGS[language];
-  root.dataset["theme"] = resolved;
+  root.dataset["theme"] = entry.mode;
   root.dataset["density"] = settings.density;
-  root.dataset["palette"] = palette;
+  root.dataset["palette"] = entry.id;
   root.dataset["chatWidth"] = settings.chatWidth;
   // src/components/AgentMark.css keys the mono logos on it
   root.dataset["marks"] = settings.agentMarks;
@@ -550,16 +560,16 @@ function applyToDocument(settings: Settings, resolved: ResolvedTheme, palette: P
   const chatFont = chatFontStack(settings.chatFontFamily);
   if (chatFont === null) root.style.removeProperty("--font-chat");
   else root.style.setProperty("--font-chat", chatFont);
-  root.style.colorScheme = resolved;
-  document.querySelector('meta[name="theme-color"]')?.setAttribute("content", THEME_COLOR[palette][resolved]);
+  root.style.colorScheme = entry.mode;
+  document.querySelector('meta[name="theme-color"]')?.setAttribute("content", themeColor(entry.mode, entry.id));
 }
 
 interface SettingsContextValue {
   settings: Settings;
   /** the theme after resolving `system` against the OS preference */
   resolvedTheme: ResolvedTheme;
-  /** the palette drawn now: `settings.palette`, or in System mode the Light or Dark one (lib/paletteFor.ts) */
-  resolvedPalette: Palette;
+  /** The actual rendered row, whose mode may differ from the selected side. */
+  resolvedEntry: ThemeEntry;
   /** the language after resolving `system` against the browser's */
   resolvedLanguage: Language;
   update: (patch: Partial<Settings>) => void;
@@ -581,7 +591,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
 
   const resolvedTheme: ResolvedTheme = settings.theme === "system" ? (systemDark ? "dark" : "light") : settings.theme;
 
-  const resolvedPalette = paletteFor(settings, resolvedTheme);
+  const resolvedEntry = themeFor(settings, resolvedTheme);
 
   const [browserLanguages, setBrowserLanguages] = useState<readonly string[]>(() => (typeof navigator !== "undefined" ? navigator.languages : []));
   useEffect(() => {
@@ -594,8 +604,8 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
   setCurrentLanguage(resolvedLanguage);
 
   useEffect(() => {
-    applyToDocument(settings, resolvedTheme, resolvedPalette, resolvedLanguage);
-  }, [settings, resolvedTheme, resolvedPalette, resolvedLanguage]);
+    applyToDocument(settings, resolvedEntry, resolvedLanguage);
+  }, [settings, resolvedEntry, resolvedLanguage]);
 
   const update = useCallback((patch: Partial<Settings>) => {
     setSettings((current) => {
@@ -605,7 +615,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
-  const value = useMemo(() => ({ settings, resolvedTheme, resolvedPalette, resolvedLanguage, update }), [settings, resolvedTheme, resolvedPalette, resolvedLanguage, update]);
+  const value = useMemo(() => ({ settings, resolvedTheme, resolvedEntry, resolvedLanguage, update }), [settings, resolvedTheme, resolvedEntry, resolvedLanguage, update]);
   return createElement(SettingsContext.Provider, { value }, children);
 }
 

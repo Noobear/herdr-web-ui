@@ -8,6 +8,8 @@ import panes from "../site/demo/fixtures/panes.json";
 import { buildDemoApp } from "./demo-build.ts";
 import { openSettingsPage } from "./settings-page.ts";
 import { chromePath } from "./chrome-path.ts";
+import { MAX_ATTACHMENT_BYTES } from "../shared/attachments.ts";
+import { SUPPORTED_ENTRIES } from "../src/lib/themes.ts";
 
 // The model label in the input card's last row, fitted to what is measured there, on the
 // unmodified app over the demo's fixture transport. The demo's panes name no context window and
@@ -234,6 +236,52 @@ try {
     const browser = await chromium.launch({ executablePath: chromePath(), headless: true, args: ["--no-sandbox"] });
     try {
       for (const width of [390, 1440]) await withCard(browser, width, { status: "idle", model: "gpt-5.6" }, async (page) => {
+        await page.evaluate(() => {
+          const fetchDemo = window.fetch;
+          let uploads = 0;
+          Object.assign(window, { fetch: (input: RequestInfo | URL, init?: RequestInit) => {
+            const path = new URL(String(input), location.href).pathname;
+            if (path.endsWith("/pane/files") || (path.endsWith("/pane/image") && ++uploads === 1)) {
+              return Promise.resolve(new Response(JSON.stringify({ error: "fixture_failure", message: "fixture upload failed" }), { status: 500 }));
+            }
+            if (path.endsWith("/pane/image")) return Promise.resolve(new Response(JSON.stringify({ path: "/fixture/retry.txt" })));
+            return fetchDemo(input, init);
+          } });
+        });
+        const box = page.getByRole("textbox", { name: "Message", exact: true });
+        const failureAlert = page.locator('.composer-surface > [role="alert"]');
+        const persistent = await failureAlert.elementHandle();
+        assert.ok(persistent, "file-list failure alert is mounted before any request");
+        assert.equal(await failureAlert.textContent(), "");
+        await page.locator('.composer-controls-left input[type="file"]').setInputFiles({ name: "retry.txt", mimeType: "text/plain", buffer: Buffer.from("fixture") });
+        const note = page.locator(".composer-note");
+        await note.getByRole("button", { name: "Try again", exact: true }).waitFor();
+        assert.ok((await note.textContent())?.includes("retry.txt"), "the upload alert identifies the failed file");
+        assert.equal(await page.locator('.composer-surface > [aria-live="polite"]').textContent(), "", "failure is not also sent to the success live region");
+        await box.fill("Keep editing this draft");
+        await note.getByRole("button", { name: "Try again", exact: true }).click();
+        await page.locator(".composer-attachment.is-ready").waitFor();
+        assert.ok((await box.inputValue()).includes("Keep editing this draft"), "retry preserves edits");
+        assert.ok((await page.locator('.composer-surface > [aria-live="polite"]').textContent())?.includes("retry.txt"), "success is announced");
+
+        const success = await page.locator('.composer-surface > [aria-live="polite"]').textContent();
+        await page.locator('.composer-controls-left input[type="file"]').setInputFiles({ name: "too-large.bin", mimeType: "application/octet-stream", buffer: Buffer.alloc(MAX_ATTACHMENT_BYTES + 1) });
+        await note.filter({ hasText: "too-large.bin" }).waitFor();
+        assert.equal(await note.getAttribute("role"), "alert");
+        assert.equal(await page.locator('.composer-surface > [aria-live="polite"]').textContent(), success, "oversize failure is not also announced politely");
+
+        await box.fill("@missing");
+        await page.locator(".composer-menu .chat-inline-error").waitFor();
+        assert.ok(await persistent.evaluate((node) => node.isConnected && node.textContent !== ""), "the initially empty alert receives the listing failure");
+        assert.equal(await page.locator(".composer-menu [role=status]").count(), 0, "the visible failure is not a second live region");
+        await box.press("Escape");
+        await page.locator(".composer-menu .chat-inline-error").waitFor({ state: "detached" });
+        assert.equal(await failureAlert.textContent(), "", "dismissing suggestions clears the announcement");
+        await persistent.dispose();
+      });
+      console.log("PASS phone and desktop upload failure has one named alert, retry survives edits, success is announced, and file-list failures use a persistent alert");
+
+      for (const width of [390, 1440]) await withCard(browser, width, { status: "idle", model: "gpt-5.6" }, async (page) => {
         await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
         const box = page.getByRole("textbox", { name: "Message", exact: true });
         const settings = async () => {
@@ -319,7 +367,8 @@ try {
         assert.equal(before.height, empty.height);
         assert.equal(await button.locator("[aria-live], [role=status]").count(), 0, "no repeated live announcement");
         const progress = button.locator(".composer-send-progress");
-        for (const palette of ["amber", "report", "charcoal", "catppuccin", "lilac", "forest"]) {
+        // every theme row of this mode, so each real block of styles.css is behind the button once
+        for (const { id: palette } of SUPPORTED_ENTRIES.filter((entry) => entry.mode === theme)) {
           await page.evaluate((palette) => { document.documentElement.dataset.palette = palette; }, palette);
           assert.equal(await progress.evaluate((node) => getComputedStyle(node).animationTimingFunction), "steps(8)");
           assert.equal(await button.evaluate((node) => getComputedStyle(node).opacity), "1");

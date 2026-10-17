@@ -1,12 +1,123 @@
-import { describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { parseThemeBlocks, parseThemeValue, resolveEntry, ThemeValueError } from "./themeCss.ts";
+import { LIGHT_ANSI_ROLES } from "./themeRoles.ts";
+import baseline from "./themes.legacy-baseline.json";
+import { ROLES, SHADOW_GEOMETRY, SUPPORTED_ENTRIES, THEME_IDS, themeColor as tableThemeColor } from "./themes.ts";
 import { FONT_FAMILY_MAX_CHARS } from "./fontFamily.ts";
 import { DEFAULT_KEY_BAR_ITEMS, migrateKeyBarItems } from "./keyBar.ts";
 import { SHARED_SETTING_KEYS } from "../../shared/preferences.ts";
-import { NOTICE_VERSION, TELEMETRY_SETTINGS_KEYS, telemetrySettings } from "../../shared/telemetry.ts";
+import { NOTICE_VERSION, TELEMETRY_SETTINGS_KEYS, TELEMETRY_THEME_SIDE_KEYS, telemetrySettings } from "../../shared/telemetry.ts";
 import { SETTING_SCOPE, telemetrySettingsSnapshot, alertPrefs, CHAT_FONT_MAX, CHAT_FONT_MIN, CHAT_LANE_MAX_REM, CHAT_LANE_MIN, CHAT_WIDTHS, chatFontSize, chatLaneLength, chatLaneWidth, DEFAULT_SETTINGS, MARKDOWN_WIDTHS, QUICK_REPLIES_MAX, QUICK_REPLY_MAX_CHARS, quickReplyButtons, sanitizeSettings, terminalTheme, forgetPaneViews, DICTATION_LANGUAGES, VOICE_BUTTONS, wantsVoiceInput } from "./settings.ts";
+import { applyToDocument, loadSettings, saveSettings } from "./settings.ts";
+import { sanitizeSettings as oldSanitizeSettings, saveSettings as oldSaveSettings } from "./settings.legacy-fixture.ts";
+import { themeFor } from "./themeFor.ts";
+
+describe("saved theme migration", () => {
+  const originalWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+  const originalDocument = Object.getOwnPropertyDescriptor(globalThis, "document");
+  let records: Map<string, string>;
+  beforeEach(() => {
+    records = new Map();
+    Object.defineProperty(globalThis, "window", { configurable: true, value: { localStorage: {
+      getItem: (key: string) => records.get(key) ?? null,
+      setItem: (key: string, value: string) => records.set(key, value),
+    } } });
+  });
+  afterEach(() => {
+    if (originalWindow) Object.defineProperty(globalThis, "window", originalWindow);
+    else Reflect.deleteProperty(globalThis, "window");
+    if (originalDocument) Object.defineProperty(globalThis, "document", originalDocument);
+    else Reflect.deleteProperty(globalThis, "document");
+  });
+  const main = "herdr-web-ui:settings";
+  const protectedThemes = "herdr-web-ui:themes";
+  const putOld = (record: object) => records.set(main, JSON.stringify(record));
+  const readOld = () => oldSanitizeSettings(JSON.parse(records.get(main) ?? "{}"));
+
+  it.each([
+    [{ theme: "dark", palette: "catppuccin" }, "catppuccin", "catppuccin"],
+    [{ theme: "system", palette: "amber", paletteLight: "catppuccin", paletteDark: "charcoal" }, "charcoal", "catppuccin"],
+    [{ theme: "dark", palette: "catppuccin", paletteDark: "charcoal" }, "catppuccin", "catppuccin"],
+    [{ theme: "dark", palette: "amber", paletteDark: "charcoal" }, "amber", "amber"],
+  ] as const)("loads the pinned legacy appearance %j (a, b, c, F3)", (raw, dark, light) => {
+    putOld(raw);
+    const settings = loadSettings();
+    expect(themeFor(settings, "dark").id).toBe(dark);
+    expect(themeFor(settings, "light").id).toBe(light);
+  });
+
+  it("keeps every legacy look readable by the pinned old sanitizer (e)", () => {
+    for (const palette of ["amber", "charcoal", "catppuccin"] as const) {
+      for (const theme of ["dark", "light", "system"] as const) {
+        const settings = sanitizeSettings({ theme, darkTheme: palette, lightTheme: palette });
+        saveSettings(settings);
+        const old = readOld();
+        expect(old.palette).toBe(palette);
+        expect(old.paletteDark).toBe(palette);
+        expect(old.paletteLight).toBe(palette);
+        expect(old).not.toHaveProperty("darkTheme");
+      }
+    }
+    saveSettings(sanitizeSettings({ darkTheme: "tokyo-night" }));
+    expect(readOld().palette).toBe("amber");
+  });
+
+  it("survives an old sanitizer and whole-record unrelated save (f)", () => {
+    saveSettings(sanitizeSettings({ darkTheme: "tokyo-night" }));
+    const old = readOld();
+    oldSaveSettings({ ...old, terminalFontSize: 18 });
+    expect(loadSettings().darkTheme).toBe("tokyo-night");
+    expect(loadSettings().terminalFontSize).toBe(18);
+  });
+
+  it("survives repeated stale saves from an already-open old tab (f1)", () => {
+    putOld({ theme: "dark", palette: "charcoal" });
+    const stale = readOld();
+    saveSettings(sanitizeSettings({ darkTheme: "tokyo-night" }));
+    for (const terminalFontSize of [14, 15, 16]) {
+      oldSaveSettings({ ...stale, terminalFontSize });
+      expect(loadSettings().darkTheme).toBe("tokyo-night");
+      expect(loadSettings().terminalFontSize).toBe(terminalFontSize);
+    }
+  });
+
+  it.each(["amber", "charcoal"] as const)("documents that an outdated tab's explicit %s pick cannot reach new code without sync (f2, f3)", (palette) => {
+    saveSettings(sanitizeSettings({ darkTheme: "tokyo-night" }));
+    oldSaveSettings({ ...readOld(), palette });
+    expect(loadSettings().darkTheme).toBe("tokyo-night");
+  });
+
+  it("loads and saves idempotently with a separate protected mirror (g)", () => {
+    putOld({ theme: "system", palette: "amber", paletteDark: "charcoal", paletteLight: "catppuccin" });
+    const first = loadSettings();
+    saveSettings(first);
+    expect(loadSettings()).toEqual(first);
+    saveSettings(loadSettings());
+    expect(loadSettings()).toEqual(first);
+    expect(JSON.parse(records.get(protectedThemes) ?? "{}")).toEqual({
+      darkTheme: "charcoal", lightTheme: "catppuccin",
+      mirror: { palette: "charcoal", paletteDark: "charcoal", paletteLight: "catppuccin" },
+    });
+  });
+
+  it("writes the row's actual mode, palette, meta and color scheme on either side (k)", () => {
+    const root = { lang: "", dataset: {}, style: { colorScheme: "", setProperty() {}, removeProperty() {} } };
+    let meta = "";
+    Object.defineProperty(globalThis, "document", { configurable: true, value: {
+      documentElement: root, querySelector: () => ({ setAttribute: (_name: string, value: string) => { meta = value; } }),
+    } });
+    const settings = sanitizeSettings({ theme: "light", lightTheme: "dracula" });
+    const entry = themeFor(settings, "light");
+    applyToDocument(settings, entry, "en");
+    expect(root.dataset).toMatchObject({ theme: "dark", palette: "dracula" });
+    expect(root.style.colorScheme).toBe("dark");
+    expect(meta).toBe(entry.bgPanel);
+    expect(terminalTheme(entry.mode, entry.id)).toEqual(entry.terminal);
+  });
+});
 
 it("keeps a tab's pane while out of use until this device turns the pause on", () => {
   expect(DEFAULT_SETTINGS.releasePaneAway).toBe(false);
@@ -36,11 +147,11 @@ it("keeps the suggestion chip off until this device turns it on, whatever an old
   expect(sanitizeSettings({ suggestionChip: "true" }).suggestionChip).toBe(false);
 });
 
-it("keeps sidebar rows on two lines unless one line was chosen", () => {
-  expect(sanitizeSettings({}).sidebarRows).toBe("two");
-  expect(sanitizeSettings({ sidebarRows: "one" }).sidebarRows).toBe("one");
+it("keeps sidebar rows on one line unless two lines were chosen", () => {
+  expect(sanitizeSettings({}).sidebarRows).toBe("one");
+  expect(sanitizeSettings({ sidebarRows: "two" }).sidebarRows).toBe("two");
   for (const sidebarRows of [null, true, "three", 2]) {
-    expect(sanitizeSettings({ sidebarRows }).sidebarRows).toBe("two");
+    expect(sanitizeSettings({ sidebarRows }).sidebarRows).toBe("one");
   }
 });
 
@@ -78,14 +189,16 @@ describe("telemetry settings snapshot", () => {
       voiceLanguage: "ko-KR",
       wrapCode: true,
       markdownWidth: "full",
-      paletteLight: "charcoal",
+      paletteLight: "catppuccin",
       paletteDark: "amber",
+      darkTheme: "amber",
+      lightTheme: "catppuccin",
       uiFontSize: 18,
       diffStyle: "split",
     });
     const snapshot = telemetrySettingsSnapshot(settings);
 
-    expect(NOTICE_VERSION).toBe(3);
+    expect(NOTICE_VERSION).toBe(4);
     expect(snapshot).toMatchObject({
       terminalInputMode: "direct",
       theme: "light",
@@ -109,8 +222,10 @@ describe("telemetry settings snapshot", () => {
       voiceLanguage: "ko-KR",
       wrapCode: true,
       markdownWidth: "full",
-      paletteLight: "charcoal",
+      paletteLight: "catppuccin",
       paletteDark: "amber",
+      darkTheme: "amber",
+      lightTheme: "catppuccin",
       uiFontSize: 18,
       diffStyle: "split",
     });
@@ -175,11 +290,22 @@ describe("telemetry settings snapshot", () => {
   it("sends exactly the keys the Worker accepts", () => {
     const sent = Object.keys(telemetrySettingsSnapshot(DEFAULT_SETTINGS));
     expect([
-      ...sent.filter((key) => !(TELEMETRY_SETTINGS_KEYS as string[]).includes(key)).map((key) =>
+      ...sent.filter((key) => !([...TELEMETRY_SETTINGS_KEYS, ...TELEMETRY_THEME_SIDE_KEYS] as string[]).includes(key)).map((key) =>
         `${key}: the app sends it and the Worker refuses the whole snapshot. Add it to TelemetrySettings and TELEMETRY_SETTINGS_VALIDATORS in shared/telemetry.ts and to the full snapshot in telemetry/worker.test.ts, then deploy the Worker before releasing (telemetry/README.md).`),
       ...TELEMETRY_SETTINGS_KEYS.filter((key) => !sent.includes(key)).map((key) =>
         `${key}: the Worker requires it and telemetrySettingsSnapshot in src/lib/settings.ts does not send it. Send it, or remove it from shared/telemetry.ts and deploy the Worker before releasing.`),
     ]).toEqual([]);
+  });
+
+  it("reports all supported ids on either side and rejects ids outside the schema", () => {
+    for (const id of THEME_IDS) {
+      for (const side of ["darkTheme", "lightTheme"] as const) {
+        const snapshot = telemetrySettingsSnapshot(sanitizeSettings({ [side]: id }));
+        expect(snapshot[side]).toBe(id);
+        expect(telemetrySettings(snapshot)).toEqual(snapshot);
+        expect(telemetrySettings({ ...snapshot, [side]: "not-a-theme" })).toBeNull();
+      }
+    }
   });
 
   it("requires a complete, valid schema and reconstructs a clean own-key snapshot", () => {
@@ -561,65 +687,204 @@ describe("palette", () => {
     expect(sanitizeSettings({ ...reloaded, theme: "light" }).palette).toBe("catppuccin");
   });
 
+  // Every check below iterates the supported entries of src/lib/themes.generated.ts and reads each value from
+  // src/styles.css through the theme parser, never from generated data, so a new theme is checked with no edit here.
   const css = readFileSync(join(import.meta.dir, "..", "styles.css"), "utf8");
-  const block = (selector: string): string => {
-    const start = css.indexOf(`${selector} {`);
-    expect(start).toBeGreaterThanOrEqual(0);
-    return css.slice(start, css.indexOf("}", start));
-  };
-  // each case lists its blocks from the most specific to the base; the first one naming a token wins
-  const cases = [
-    { theme: "dark", palette: "amber", layers: [":root"] },
-    { theme: "light", palette: "amber", layers: ['[data-theme="light"]', ":root"] },
-    { theme: "dark", palette: "charcoal", layers: ['[data-theme="dark"][data-palette="charcoal"]', ":root"] },
-    { theme: "light", palette: "charcoal", layers: ['[data-theme="light"][data-palette="charcoal"]', '[data-theme="light"]', ":root"] },
-    { theme: "dark", palette: "catppuccin", layers: ['[data-theme="dark"][data-palette="catppuccin"]', ":root"] },
-    { theme: "light", palette: "catppuccin", layers: ['[data-theme="light"][data-palette="catppuccin"]', '[data-theme="light"]', ":root"] },
-  ] as const;
-  const tokens = (layers: readonly string[]) => (name: string): string =>
-    layers.map((selector) => block(selector).match(new RegExp(`--${name}: ([^;]+);`))?.[1]).find((value) => value !== undefined)!;
-
-  it("mirrors each palette's --term-* tokens of styles.css for xterm", () => {
-    for (const { theme, palette, layers } of cases) {
-      const read = tokens(layers);
-      expect(terminalTheme(theme, palette)).toEqual({ background: read("term-bg"), foreground: read("term-fg"), cursor: read("term-cursor"), selectionBackground: read("term-selection") });
+  const legacy = new Set([...Object.keys(baseline.combos), "catppuccin-latte/light"]);
+  const entries = SUPPORTED_ENTRIES.map(({ id, mode }) => ({ id, mode, key: `${id}/${mode}` }));
+  /** Runs one entry's checks; an unreadable theme value becomes a failure naming entry and role, not a crash. */
+  const checked = (failures: string[], check: () => void): void => {
+    try {
+      check();
+    } catch (error) {
+      if (!(error instanceof ThemeValueError)) throw error;
+      failures.push(error.message);
     }
+  };
+
+  it("checks exactly the theme entries src/styles.css declares", () => {
+    expect(entries.map(({ key }) => key).sort()).toEqual(Object.keys(parseThemeBlocks(css)).sort());
   });
 
-  it("keeps text and agent states readable (WCAG AA 4.5:1) on every surface of every palette", () => {
-    type Rgb = [number, number, number];
-    const rgba = (value: string): [Rgb, number] => {
-      const hex = value.match(/^#([0-9a-f]{6})$/);
-      if (hex) return [[0, 2, 4].map((i) => parseInt(hex[1]!.slice(i, i + 2), 16)) as Rgb, 1];
-      const parts = value.match(/^rgba\((\d+), (\d+), (\d+), ([\d.]+)\)$/)!;
-      return [[Number(parts[1]), Number(parts[2]), Number(parts[3])], Number(parts[4])];
-    };
-    const over = (top: string, under: Rgb): Rgb => {
-      const [rgb, alpha] = rgba(top);
-      return rgb.map((c, i) => c * alpha + under[i]! * (1 - alpha)) as Rgb;
-    };
-    const luminance = (rgb: Rgb): number => {
-      const [r, g, b] = rgb.map((c) => (c / 255 <= 0.04045 ? c / 255 / 12.92 : ((c / 255 + 0.055) / 1.055) ** 2.4)) as Rgb;
-      return 0.2126 * r + 0.7152 * g + 0.0722 * b;
-    };
-    const ratio = (a: Rgb, b: Rgb): number => {
-      const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x) as [number, number];
-      return (hi + 0.05) / (lo + 0.05);
-    };
+  it("gives every entry every theme role, declared in its own block for a new theme, with the mode's shadow geometry", () => {
     const failures: string[] = [];
-    for (const { theme, palette, layers } of cases) {
-      const read = tokens(layers);
-      const color = (name: string): Rgb => rgba(read(name))[0];
-      for (const surface of ["bg", "bg-panel", "bg-elevated", "bg-hover"]) {
-        for (const text of ["text", "text-dim"]) {
-          if (ratio(color(text), color(surface)) < 4.5) failures.push(`${theme}/${palette} ${text} on ${surface}`);
+    for (const { id, mode, key } of entries) {
+      checked(failures, () => {
+        const own = parseThemeBlocks(css)[key]?.declared ?? {};
+        const { declared, resolved } = resolveEntry(css, id, mode);
+        for (const [role, kind] of Object.entries(ROLES)) {
+          if (resolved[`--${role}`] === undefined) failures.push(`${key} ${role}: missing`);
+          // the legacy entries inherit from the amber blocks as they always did; a new theme falls through to nothing
+          else if (!legacy.has(key) && own[`--${role}`] === undefined) failures.push(`${key} ${role}: not declared in its own block`);
+          if (kind !== "shadow" || resolved[`--${role}`] === undefined) continue;
+          // a whole-value alias names another shadow; any other target is not one
+          let value = declared[`--${role}`] ?? "";
+          for (let alias = /^var\((--[\w-]+)\)$/.exec(value); alias?.[1]; alias = /^var\((--[\w-]+)\)$/.exec(value)) value = declared[alias[1]] ?? "";
+          const shadow = parseThemeValue(key, role, value);
+          if (shadow.kind !== "shadow") throw new ThemeValueError(key, role, value, "not a shadow");
+          const geometry = shadow.layers.map((layer) => layer.geometry);
+          const fixed: readonly string[] = SHADOW_GEOMETRY[mode][role as keyof (typeof SHADOW_GEOMETRY)[typeof mode]];
+          if (geometry.join(", ") !== fixed.join(", ")) failures.push(`${key} ${role}: geometry ${geometry.join(", ")} is not ${mode}'s ${fixed.join(", ")}`);
         }
-        // a status badge: its color on its tint, over a (hovered or selected) row
-        for (const state of ["working", "blocked", "done"]) {
-          const backdrop = over(read(`status-${state}-tint`), color(surface));
-          if (ratio(color(`status-${state}`), backdrop) < 4.5) failures.push(`${theme}/${palette} ${state} badge on ${surface}`);
+      });
+    }
+    expect(failures).toEqual([]);
+  });
+
+  it("parts every entry's control edges from its surfaces: --border differs from --bg-elevated, --bg-input and --border-strong", () => {
+    // the herdr mapping sets --bg-elevated, --bg-input and --border from one token, which hid select wells and row
+    // dividers; every legacy entry already differs, so no entry is excepted here
+    const failures: string[] = [];
+    for (const { id, mode, key } of entries) {
+      checked(failures, () => {
+        const { resolved } = resolveEntry(css, id, mode);
+        for (const role of ["bg-elevated", "bg-input", "border-strong"]) {
+          if (resolved[`--${role}`] === resolved["--border"]) failures.push(`${key} ${role}: equals --border ${resolved["--border"]}`);
         }
-      }
+      });
+    }
+    expect(failures).toEqual([]);
+  });
+
+  type Rgb = [number, number, number];
+  const luminance = (rgb: Rgb): number => {
+    const [r, g, b] = rgb.map((c) => (c / 255 <= 0.04045 ? c / 255 / 12.92 : ((c / 255 + 0.055) / 1.055) ** 2.4)) as Rgb;
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  };
+  const ratio = (a: Rgb, b: Rgb): number => {
+    const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x) as [number, number];
+    return (hi + 0.05) / (lo + 0.05);
+  };
+
+  it("shows every entry's chosen segment: --bg-hover parts from its track (--bg-elevated, --bg-input in Settings) or --text-strong from --text-dim", () => {
+    // a segmented control fills the chosen option with --bg-hover on a track of --bg-elevated (--bg-input in Settings) and
+    // writes its label in --text-strong beside --text-dim labels; the herdr mapping and the AA repair collapsed both pairs in
+    // solarized-light, so no option looked chosen. The weakest pairs that still read set the floors: tokyo-night's label
+    // 1.31:1 on a 1.03:1 fill, tokyo-night-day's fill 1.11:1 under a 1.00:1 label
+    const failures: string[] = [];
+    for (const { id, mode, key } of entries) {
+      checked(failures, () => {
+        const { resolved } = resolveEntry(css, id, mode);
+        const hex = (role: string): Rgb => {
+          const raw = resolved[`--${role}`] ?? "(missing)";
+          const parsed = parseThemeValue(key, role, raw);
+          const match = parsed.kind === "color" ? /^#([0-9a-f]{6})$/.exec(parsed.value) : null;
+          if (!match?.[1]) throw new ThemeValueError(key, role, raw, "not an opaque color");
+          return [0, 2, 4].map((i) => parseInt(match[1]!.slice(i, i + 2), 16)) as Rgb;
+        };
+        const fill = Math.min(ratio(hex("bg-hover"), hex("bg-elevated")), ratio(hex("bg-hover"), hex("bg-input")));
+        const label = ratio(hex("text-strong"), hex("text-dim"));
+        if (fill < 1.05 && label < 1.25) failures.push(`${key}: pressed fill ${fill.toFixed(2)}:1 on its track, pressed label ${label.toFixed(2)}:1 beside quiet labels`);
+      });
+    }
+    expect(failures).toEqual([]);
+  });
+
+  it("mirrors every entry's --term-* tokens of styles.css for xterm and its --bg-panel for the title bar", () => {
+    const failures: string[] = [];
+    for (const { id, mode, key } of entries) {
+      checked(failures, () => {
+        const { resolved } = resolveEntry(css, id, mode);
+        const expected = {
+          background: resolved["--term-bg"], foreground: resolved["--term-fg"], cursor: resolved["--term-cursor"], selectionBackground: resolved["--term-selection"],
+          ...(mode === "light" ? Object.fromEntries(Object.entries(LIGHT_ANSI_ROLES).map(([name, role]) => [name, resolved[`--${role}`]])) : {}),
+        };
+        let terminal: unknown;
+        try {
+          terminal = terminalTheme(mode, id as Parameters<typeof terminalTheme>[1]);
+        } catch (error) {
+          terminal = String(error);
+        }
+        if (JSON.stringify(terminal) !== JSON.stringify(expected)) failures.push(`${key} terminal: ${JSON.stringify(terminal)} is not ${JSON.stringify(expected)}`);
+        if (tableThemeColor(id, mode) !== resolved["--bg-panel"]) failures.push(`${key} theme-color: ${tableThemeColor(id, mode)} is not ${resolved["--bg-panel"]}`);
+      });
+    }
+    expect(failures).toEqual([]);
+  });
+
+  it("gives index.html and the web manifest amber dark's panel and page colors", () => {
+    const { resolved } = resolveEntry(css, "amber", "dark");
+    const metas: string[] = [];
+    new HTMLRewriter().on('meta[name="theme-color"]', { element: (meta) => void metas.push(meta.getAttribute("content") ?? "") })
+      .transform(readFileSync(join(import.meta.dir, "..", "..", "index.html"), "utf8"));
+    expect(metas).toEqual([resolved["--bg-panel"]!]);
+    const manifest = JSON.parse(readFileSync(join(import.meta.dir, "..", "..", "public", "manifest.webmanifest"), "utf8"));
+    expect({ theme_color: manifest.theme_color, background_color: manifest.background_color }).toEqual({ theme_color: resolved["--bg-panel"], background_color: resolved["--bg"] });
+  });
+
+  it("declares all sixteen readable ANSI colours only in light rows and passes them to xterm", () => {
+    const failures: string[] = [];
+    const blocks = parseThemeBlocks(css);
+    const hex = (value: string): Rgb => {
+      if (!/^#[0-9a-f]{6}$/.test(value)) throw new ThemeValueError("ANSI", "color", value, "not an opaque color");
+      return [parseInt(value.slice(1, 3), 16), parseInt(value.slice(3, 5), 16), parseInt(value.slice(5, 7), 16)];
+    };
+    expect(Object.keys(LIGHT_ANSI_ROLES)).toHaveLength(16);
+    for (const { id, mode, key } of entries) {
+      checked(failures, () => {
+        const own = blocks[key]?.declared ?? {};
+        const { resolved } = resolveEntry(blocks, id, mode);
+        const terminal = terminalTheme(mode, id);
+        for (const [name, role] of Object.entries(LIGHT_ANSI_ROLES)) {
+          const token = `--${role}`;
+          if (mode === "dark") {
+            if (own[token] !== undefined || Object.hasOwn(terminal, name)) failures.push(`${key} ${role}: dark ANSI override`);
+            continue;
+          }
+          if (own[token] === undefined) failures.push(`${key} ${role}: missing own declaration`);
+          const value = resolved[token] ?? "(missing)";
+          const contrast = ratio(hex(value), hex(resolved["--term-bg"] ?? "(missing)"));
+          if (contrast < 4.5) failures.push(`${key} ${role}: ${contrast}:1 on term-bg`);
+          if (Reflect.get(terminal, name) !== value) failures.push(`${key} ${role}: not passed to xterm`);
+        }
+      });
+    }
+    expect(failures).toEqual([]);
+  });
+
+  it("keeps text, agent states and code readable (WCAG AA 4.5:1) on every surface of every entry", () => {
+    const over = ([rgb, alpha]: [Rgb, number], under: Rgb): Rgb => rgb.map((c, i) => c * alpha + under[i]! * (1 - alpha)) as Rgb;
+    const failures: string[] = [];
+    for (const { id, mode, key } of entries) {
+      checked(failures, () => {
+        const { resolved } = resolveEntry(css, id, mode);
+        // the committed value through the theme value parser: an unexpected form is named, never a null match
+        const rgba = (role: string): [Rgb, number] => {
+          const raw = resolved[`--${role}`] ?? "(missing)";
+          const parsed = parseThemeValue(key, role, raw);
+          const value = parsed.kind === "color" ? parsed.value : "";
+          const hex = /^#([0-9a-f]{6})$/.exec(value);
+          if (hex?.[1]) return [[0, 2, 4].map((i) => parseInt(hex[1]!.slice(i, i + 2), 16)) as Rgb, 1];
+          const parts = /^rgba\((\d+), (\d+), (\d+), ([\d.]+)\)$/.exec(value);
+          if (!parts) throw new ThemeValueError(key, role, raw);
+          return [[Number(parts[1]), Number(parts[2]), Number(parts[3])], Number(parts[4])];
+        };
+        const color = (role: string, under: Rgb = [0, 0, 0]): Rgb => over(rgba(role), under);
+        // a field's placeholder is --text-dim on --bg-input (src/styles.css ::placeholder)
+        const input = color("bg-input");
+        if (ratio(color("text-dim", input), input) < 4.5) failures.push(`${key} placeholder (text-dim) on bg-input`);
+        for (const surface of ["bg", "bg-panel", "bg-elevated", "bg-hover"]) {
+          const ground = color(surface);
+          for (const text of ["text", "text-dim"]) {
+            if (ratio(color(text, ground), ground) < 4.5) failures.push(`${key} ${text} on ${surface}`);
+          }
+          // a status badge: its color on its tint, over a (hovered or selected) row
+          for (const state of ["working", "blocked", "done"]) {
+            const backdrop = over(rgba(`status-${state}-tint`), ground);
+            if (ratio(color(`status-${state}`, backdrop), backdrop) < 4.5) failures.push(`${key} ${state} badge on ${surface}`);
+          }
+        }
+        // a primary control's label on its own fill (.btn-primary)
+        const fill = color("primary");
+        if (ratio(color("primary-text", fill), fill) < 4.5) failures.push(`${key} primary-text on primary`);
+        // highlighted code sits on the panel (a file preview) or an elevated card (a chat code block)
+        for (const surface of ["bg-panel", "bg-elevated"]) {
+          const ground = color(surface);
+          for (const token of ["function", "keyword", "string", "number", "type", "variable", "meta"]) {
+            if (ratio(color(`syntax-${token}`, ground), ground) < 4.5) failures.push(`${key} syntax-${token} on ${surface}`);
+          }
+        }
+      });
     }
     expect(failures).toEqual([]);
   });

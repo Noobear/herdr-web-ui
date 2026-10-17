@@ -2,7 +2,7 @@ import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useReduce
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
-import { ChevronRight, ClipboardCheck, Clock, Quote, TriangleAlert, Unplug, X } from "lucide-react";
+import { ArrowUp, ChevronRight, ClipboardCheck, Clock, Eye, Quote, SendHorizontal, Trash2, TriangleAlert, Unplug, X } from "lucide-react";
 import "@xterm/xterm/css/xterm.css";
 import "./PaneTerminal.css";
 
@@ -24,7 +24,8 @@ import { type DraftRefusal, MAX_COMPOSER_CHARS, QUEUE_READY_STATUS, agentDisplay
 import { afterRead, afterSend, afterSettled, composerLift, greetingMemory, rememberGreeting, greetingFits, greetingFolder, roomOverComposer, showsGreeting, type ChatRead } from "../lib/greeting.ts";
 import { DETACHED, usePaneBranch } from "../lib/paneBranch.ts";
 import { answerFromText, answerHint, answerRefusal, needsConfirmation, type TypedAnswer } from "../lib/promptAnswer.ts";
-import { ApiError, assertAttachable, fetchPaneScroll, fetchPaneSelection, scrollPane } from "../lib/api.ts";
+import { ApiError, AttachmentTooLargeError, assertAttachable, fetchPaneScroll, fetchPaneSelection, scrollPane } from "../lib/api.ts";
+import { userErrorMessage } from "../lib/userError.ts";
 import { parseOsc52 } from "../lib/osc52.ts";
 import { composerDrafts } from "../lib/composerDraft.ts";
 import { appendQuote, formatTerminalQuote } from "../lib/terminalQuote.ts";
@@ -52,10 +53,11 @@ import { isAppShortcut } from "../lib/shortcuts.ts";
 import { plainPageDirection } from "../lib/pageScroll.ts";
 import { keyboardHoldsGrid, keyboardUp } from "../lib/keyboard.ts";
 import { OpenFileContext } from "../lib/filePaths.ts";
-import { fileUriPath, hyperlinkFilter, isWebLink, terminalFileLinkProvider } from "../lib/terminalFileLinks.ts";
+import { fileUriPath, hyperlinkFilter, isWebLink, openWebLink, terminalFileLinkProvider } from "../lib/terminalFileLinks.ts";
 import { adjustTerminalGlyphs } from "../lib/terminalGlyphs.ts";
 import { terminalLabel } from "../lib/terminalLabel.ts";
 import { useMediaQuery } from "../lib/useMediaQuery.ts";
+import { useAnnouncedText } from "../lib/useAnnouncedText.ts";
 import { modalOpen } from "../lib/focus.ts";
 import { pinchFontSize } from "../lib/pinchFontSize.ts";
 import { narrowPaneFontSize } from "../lib/narrowPaneFont.ts";
@@ -71,6 +73,17 @@ const RELEASE_AFTER_MS = 1000;
 // in the background: taking the pane then sized it for nobody, and herdr's own TUI drew it cut
 // off at its split's edge
 const inUse = (): boolean => document.visibilityState === "visible" && document.hasFocus();
+
+/** The PC sockets this page has been connected to (lib/machineSession.ts keeps one per PC, across pane
+    views and terminal mounts): not connected on one of them, a terminal is reconnecting; on any other, it
+    is connecting for the first time. The words say which (here, ChatView and the header's chip). */
+const connectedSockets = new WeakSet<HerdrSocket>();
+
+/** A failure as one line: the plain sentence, then what the server or the browser said. */
+const plainError = (cause: unknown): string => {
+  const failure = userErrorMessage(cause);
+  return failure.detail === null ? failure.message : `${failure.message} (${failure.detail})`;
+};
 
 export interface PaneTerminalProps {
   /** The pane this terminal attaches to; null renders the placeholder. */
@@ -127,8 +140,9 @@ export interface PaneTerminalProps {
   role?: ClientRole;
   /** Fires with the server-confirmed role (the header toggle shows it). */
   onRoleAck?: (mode: ClientRole) => void;
-  /** Fires on every change of the socket's connected state (the header shows it). */
-  onConnectionChange?: (connected: boolean) => void;
+  /** Fires on every change of the socket's connected state (the header shows it). `connectedBefore`: the
+   *  socket has been connected on this page before, so a connection it waits for is a reconnect, not the first. */
+  onConnectionChange?: (connected: boolean, connectedBefore: boolean) => void;
   /** Every server frame also reaches App: it merges pane-status and schedules refetches. */
   onServerMessage?: (message: ServerMessage) => void;
 }
@@ -222,6 +236,7 @@ export function PaneTerminal({
   wheelSpeedRef.current = terminalWheelSpeed;
   const hostRef = useRef<HTMLDivElement | null>(null);
   const pinchBadgeRef = useRef<HTMLSpanElement | null>(null);
+  const pinchStatusRef = useRef<HTMLSpanElement | null>(null);
   /** the user's font size (settings, or a pinch in progress); a narrow split pane may draw smaller */
   const baseFontRef = useRef(terminalFontSize);
   const stackRef = useRef<HTMLDivElement | null>(null);
@@ -236,6 +251,9 @@ export function PaneTerminal({
   const onServerMessageRef = useRef(onServerMessage);
   const onRoleAckRef = useRef(onRoleAck);
   const [connected, setConnected] = useState(false);
+  /** the socket has been connected on this page before (connectedSockets): not connected, this terminal, its
+   *  chat and the header say Reconnecting; before the first connection they say Connecting */
+  const [connectedBefore, setConnectedBefore] = useState(false);
   const pendingScopeRef = useRef<string | null>(null);
   /** The PC session's epoch: a receipt belongs to the connection on which its request left. */
   const pendingEpochRef = useRef(0);
@@ -506,8 +524,10 @@ export function PaneTerminal({
   onRoleAckRef.current = onRoleAck;
 
   useEffect(() => {
-    if (active) onConnectionChangeRef.current?.(connected);
-  }, [connected, active]);
+    if (connected && socketRef.current !== null) connectedSockets.add(socketRef.current);
+    if (connected && !connectedBefore) setConnectedBefore(true);
+    if (active) onConnectionChangeRef.current?.(connected, connectedBefore || connected);
+  }, [connected, connectedBefore, active]);
 
   useEffect(() => {
     if (active) onRoleAckRef.current?.(observing ? "observe" : "interact");
@@ -549,12 +569,16 @@ export function PaneTerminal({
       // a chosen family follows in the font effect below, once its faces have loaded
       fontFamily: TERMINAL_FONT_STACK,
       theme: terminalTheme(theme, palette),
+      // a program's own colors suit one background (Claude Code's question titles are #ffffff, near
+      // 1:1 on a light palette): xterm moves a foreground under 4.5:1 toward black or white. Dim text
+      // needs half that, and box, block and powerline glyphs keep their color.
+      minimumContrastRatio: 4.5,
       linkHandler: {
         activate: (event, uri) => {
           if (!linkPressed(event)) return;
           const path = fileUriPath(uri);
           if (path !== null) openFileRef.current?.(path);
-          else if (isWebLink(uri)) window.open(uri, "_blank", "noopener,noreferrer");
+          else if (isWebLink(uri)) openWebLink(uri);
         },
         allowNonHttpProtocols: true,
       },
@@ -582,7 +606,7 @@ export function PaneTerminal({
     term.loadAddon(fit);
     matchHerdrWidths(term);
     // the same policy as the linkHandler above: an http(s) address or nothing (S10)
-    term.loadAddon(new WebLinksAddon((_event, uri) => { if (isWebLink(uri)) window.open(uri, "_blank", "noopener,noreferrer"); }));
+    term.loadAddon(new WebLinksAddon((_event, uri) => { if (isWebLink(uri)) openWebLink(uri); }));
     term.registerLinkProvider(terminalFileLinkProvider(() => term.buffer.active, (path, event) => { if (linkPressed(event)) openFileRef.current?.(path); }));
     term.open(host);
     let compositionEndTimer: number | null = null;
@@ -1080,6 +1104,8 @@ export function PaneTerminal({
     pendingScopeRef.current = session.scope;
     pendingEpochRef.current = session.epoch;
     socketRef.current = socket;
+    // a socket this page was connected to before this mount (a switch back to the PC): a wait is a reconnect
+    setConnectedBefore(connectedSockets.has(socket));
     let outputGeneration = 0;
     let deferredAttach = false;
     const off = session.on((message, sent) => {
@@ -1161,6 +1187,8 @@ export function PaneTerminal({
         }
       } else if (message.type === "pty-exit") {
         // an ended pane takes no input: a file dropped on it must not upload and paste either
+        // held input stays: the server also says pty-exit when herdr restarts or an attach fails,
+        // and the same pane comes back; only the user sends or discards it
         if (message.pane_id === paneRef.current) { setEnded(true); term.options.disableStdin = true; }
       } else if (message.type === "role-ack") {
         // the server is the authority on the role; only after this ack may an
@@ -1443,7 +1471,8 @@ export function PaneTerminal({
         pasteText(paths.map((path) => `'${path.replaceAll("'", "'\\''")}'`).join(" ") + " ");
         if (activeRef.current && !findOpenRef.current) term.focus();
       } catch (error) {
-        if (paneRef.current === pane) noteClipboard(error instanceof Error ? error.message : String(error));
+        // a file over the limit already says which file and the limit, in the UI language
+        if (paneRef.current === pane) noteClipboard(error instanceof AttachmentTooLargeError ? error.message : plainError(error));
       }
     };
     const onFilePaste = (event: ClipboardEvent): void => {
@@ -1535,6 +1564,7 @@ export function PaneTerminal({
     // from a second finger until every finger lifts: the stroke is a pinch, never a scroll
     let pinchStroke = false;
     let pinchWatchPending = false;
+    let pinchStatusFrame: number | null = null;
     const spread = (a: Touch, b: Touch): number => Math.hypot(b.clientX - a.clientX, b.clientY - a.clientY);
     const hidePinchBadge = (): void => {
       if (pinchBadgeRef.current) pinchBadgeRef.current.hidden = true;
@@ -1563,6 +1593,14 @@ export function PaneTerminal({
         // a pinch can end after the pane went behind a sibling of its split: it saves the size, sizing no pty
         if (current && inUse() && !adopted() && !chatViewRef.current && sizesPty()) socket.resize(current, term.cols, term.rows, true);
         updateSettings({ terminalFontSize: finished.size });
+        // said once, for the size kept: the badge that follows the fingers is not read out
+        const t = tRef.current; // the language of now, not of the attach
+        if (pinchStatusFrame !== null) cancelAnimationFrame(pinchStatusFrame);
+        if (pinchStatusRef.current) pinchStatusRef.current.textContent = "";
+        pinchStatusFrame = requestAnimationFrame(() => {
+          pinchStatusFrame = null;
+          if (pinchStatusRef.current) pinchStatusRef.current.textContent = t("Terminal text size {px} px", { px: finished.size });
+        });
       }
       hidePinchBadge();
     };
@@ -1583,6 +1621,8 @@ export function PaneTerminal({
         return;
       }
       if (event.touches.length >= 2) {
+        if (pinchStatusFrame !== null) cancelAnimationFrame(pinchStatusFrame);
+        pinchStatusFrame = null;
         tracking = false;
         pinchStroke = true;
         claimPinch(event);
@@ -1932,6 +1972,7 @@ export function PaneTerminal({
       host.removeEventListener("gesturestart", onGesture);
       host.removeEventListener("gesturechange", onGesture);
       finishPinch(false);
+      if (pinchStatusFrame !== null) cancelAnimationFrame(pinchStatusFrame);
       host.removeEventListener("mousedown", onMouseDown, { capture: true });
       window.removeEventListener("mousemove", onMouseMove, { capture: true });
       window.removeEventListener("blur", onBlur);
@@ -1991,7 +2032,8 @@ export function PaneTerminal({
   // the theme follows the settings without a remount
   useEffect(() => {
     const term = termRef.current;
-    if (term) term.options.theme = terminalTheme(theme, palette);
+    if (!term) return;
+    term.options.theme = terminalTheme(theme, palette);
   }, [theme, palette]);
 
   // the font follows too, and a font change moves the grid. xterm measures the cell (and the DOM
@@ -2528,14 +2570,17 @@ export function PaneTerminal({
     });
     if (!ended && connected && !draftIsEmpty(draft)) noticeItems.push({
       id: `${owner}:draft`, priority: "activity", revision: `${draft.truncated ? "…" : ""}${draft.text}`, warning: false, mark: <Clock />,
+      // on screen the row is its parts, the held text and its two controls, as the terminal lens's
+      // held-input row; the words are for the live region
       text: <>
-        {t("Input held until the terminal is ready:")}
-        {draft.text.length > 0 && <> <code>{draft.text}</code></>}
+        <span className="visually-hidden">{t("Input held:")}</span>
+        {draft.text.length > 0 && <code title={draft.text}>{draft.text}</code>}
         {draft.truncated && <> {t("Some input was too long to hold and was left out.")}</>}
       </>,
       actions: <>
-        <button type="button" className="composer-notice-action" disabled={draft.text.length === 0 || observing || secretActive || held} onClick={sendDraft}>{t("Send")}</button>
-        <button type="button" className="composer-notice-action is-quiet" onClick={discardDraft}>{t("Discard")}</button>
+        {/* the composer's send glyph (an up arrow) on the row's plain icon button, beside its Discard */}
+        <button type="button" className="icon-button" aria-label={t("Send held input")} title={t("Send held input")} disabled={draft.text.length === 0 || observing || secretActive || held} onClick={sendDraft}><ArrowUp aria-hidden="true" /></button>
+        <button type="button" className="icon-button" aria-label={t("Discard held input")} title={t("Discard held input")} onClick={discardDraft}><Trash2 aria-hidden="true" /></button>
       </>,
     });
     if (clipboardNote) noticeItems.push({ id: `${owner}:clipboard`, priority: "notice", revision: clipboardNote, warning: false, mark: <ClipboardCheck />, text: clipboardNote });
@@ -2567,7 +2612,7 @@ export function PaneTerminal({
           () => { setPromptRefresh((key) => key + 1); return true; },
           (cause: unknown) => {
             setPromptRefresh((key) => key + 1);
-            return cause instanceof ApiError && cause.status === 409 ? t("The question on screen changed; check it and answer again.") : String(cause instanceof Error ? cause.message : cause);
+            return cause instanceof ApiError && cause.status === 409 ? t("The question on screen changed; check it and answer again.") : plainError(cause);
           },
         );
       }
@@ -2721,6 +2766,11 @@ export function PaneTerminal({
     return () => observer.disconnect();
   }, [inputSlot]);
 
+  // the wait for input is a live region in the banner column from the stack's first render, clipped while
+  // empty (never display: none); its words land a frame after it (lib/useAnnouncedText.ts). Only a
+  // selected pane waits: with none there is no terminal whose input could become ready
+  const waitingWords = useAnnouncedText(paneId !== null && !chatView && !observing && connected && !inputReady && !held && !ended && !released ? t("Waiting for terminal input…") : null);
+
   return (
     // data-direct-typing: xterm's own field raises the soft keyboard here (lib/viewport.ts)
     <div ref={stackRef} className={`terminal-stack${chatView ? " is-chat" : ""}${greeted ? " is-greeted" : ""}`} data-pane-owner={paneId === null ? undefined : paneStorageId(machineId, paneId)} data-direct-typing={coarse && directTyping && !chatView ? "" : undefined}>
@@ -2766,41 +2816,45 @@ export function PaneTerminal({
           </div>
         )}
         {!chatView && inputError && <div className="terminal-banner" role="status">{inputError}<button type="button" className="btn terminal-banner-action" onClick={() => setInputError(null)}>{t("Dismiss")}</button></div>}
-        {!chatView && !observing && connected && !inputReady && !held && !ended && !released && <div className="terminal-banner" role="status">{t("Waiting for terminal input…")}</div>}
+        <div className={waitingWords === null ? "visually-hidden" : "terminal-banner"} role="status">{waitingWords}</div>
         {paneId !== null && !chatView && released && <div className="terminal-banner" role="status">{t(watching ? "View only while you use another window · click to type" : "Paused while you use another window")}</div>}
         {/* the chat lens says these itself (ChatView), inline; the pills are the grid's */}
         {paneId !== null && !chatView && ended && !outputError && (
           <div className="terminal-banner" role="status">
-            terminal ended{!draftIsEmpty(draft) ? " — held input discarded" : ""}
+            {t("Terminal ended")}
           </div>
         )}
         {paneId !== null && !chatView && !ended && !connected && (
           <div className="terminal-banner terminal-banner-warning" role="status">
-            reconnecting to herdr web ui…
-            {draft.text.length > 0 && <span className="draft-held"> input held: “{draft.text}”</span>}
+            {t(connectedBefore ? "Reconnecting to herdr web ui…" : "Connecting to herdr web ui…")}
+            {/* one line, cut with an ellipsis: a command is never broken inside a word; the title holds it whole */}
+            {draft.text.length > 0 && <span className="draft-held" title={draft.text}> {t("Input held:")} <code>“{draft.text}”</code></span>}
           </div>
         )}
         {paneId !== null && !ended && connected && !draftIsEmpty(draft) && !noticesDocked && (
           <div className="terminal-banner terminal-banner-draft" role="status">
-            <span className="draft-label">{t("Input held until the terminal is ready:")}</span>
-            {draft.text.length > 0 && <code className="draft-text">{draft.text}</code>}
-            {/* the preview shows the start of the text: without this, a draft that lost its end looks whole */}
+            {/* on screen the row is its parts, the command and its two controls; the words are for the live region */}
+            <span className="visually-hidden">{t("Input held:")}</span>
+            {draft.text.length > 0 && <code className="draft-text" title={draft.text}>{draft.text}</code>}
+            <span className="draft-actions">
+              <button type="button" className="icon-button draft-send" aria-label={t("Send held input")} title={t("Send held input")} disabled={draft.text.length === 0 || observing || secretActive || held} onClick={sendDraft}>
+                <SendHorizontal aria-hidden="true" />
+              </button>
+              <button type="button" className="icon-button draft-discard" aria-label={t("Discard held input")} title={t("Discard held input")} onClick={discardDraft}>
+                <Trash2 aria-hidden="true" />
+              </button>
+            </span>
+            {/* said only when it applies, on a line under the row. The preview shows the start of the
+                text: without this, a draft that lost its end looks whole */}
             {draft.truncated && <span className="draft-truncated">{t("Some input could not be held and was left out.")}</span>}
             {/* Enter is never held: without this, two commands look like one line and a paste looks whole */}
             {draft.leftOut && <span className="draft-truncated">{t("An Enter or line break was left out: Send never presses Enter.")}</span>}
-            <span className="draft-actions">
-              <button type="button" className="draft-send" disabled={draft.text.length === 0 || observing || secretActive || held} onClick={sendDraft}>
-                {t("Send")}
-              </button>
-              <button type="button" className="draft-discard" onClick={discardDraft}>
-                {t("Discard")}
-              </button>
-            </span>
           </div>
         )}
         {paneId !== null && !ended && observing && (
           <div className="terminal-banner terminal-banner-observe" role="status">
-            view only — the operator’s screen size is untouched
+            <Eye aria-hidden="true" />
+            {t("View only")}
           </div>
         )}
         {paneId !== null && !chatView && selectionQuote?.pane === paneId && (
@@ -2836,6 +2890,7 @@ export function PaneTerminal({
             stop on the wrapper would only be an empty one ahead of it. */}
         <div className={`pane-terminal${paneId === null ? " is-idle" : ""}`} ref={hostRef} role={chatView ? undefined : "region"} aria-roledescription={chatView ? undefined : t("Terminal")} aria-label={chatView ? undefined : terminalName} />
         <span className="terminal-font-size" ref={pinchBadgeRef} hidden aria-hidden="true" />
+        <span className="visually-hidden" ref={pinchStatusRef} aria-live="polite" />
         {paneId !== null && <TerminalViewportTools key={paneId} viewportIntent={viewportIntent} terminal={terminal} paneId={paneId}
           pageScroll={chatView ? undefined : pageScroll}
           onApplicationPage={sendApplicationPage}
@@ -2878,6 +2933,7 @@ export function PaneTerminal({
             onPendingAnswerDone={clearPendingAnswer}
             promptDock={promptDock}
             onPromptAnswered={onPromptAnswered}
+            title={title}
           />
           </RenderBoundary>
         )}
@@ -2987,6 +3043,7 @@ export function PaneTerminal({
           backgroundWait={backgroundWait}
           metadata={chatMetadata?.pane === paneId ? chatMetadata.value : null}
           connected={connected && !held}
+          connectedBefore={connectedBefore}
           answerHint={answering === null ? null
             : pendingAnswer?.promptId === answering.id ? t("Confirm your answer in the card above, or type another…") : answerHint(answering)}
           // no suggestion under any card, a fallback or queued one included

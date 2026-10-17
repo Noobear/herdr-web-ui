@@ -69,6 +69,11 @@
   margin-left: auto;
 }
 
+/* the held-input row's controls (send, discard): glyph buttons in the dismiss's register */
+.composer-notice-actions .icon-button {
+  color: var(--text-dim);
+}
+
 /* a notice's own way on (Open here, Reconnect, Send) in the held rows' button; Discard is the quiet one */
 .composer-notice-action {
   display: inline-flex;

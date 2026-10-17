@@ -75,7 +75,7 @@ try {
   page.setDefaultTimeout(10_000);
   await page.goto(`http://127.0.0.1:${server.port}/?pane=${encodeURIComponent(paneId)}`);
   await page.locator(".conn-live").waitFor();
-  const log = page.getByRole("log", { name: `conversation of ${paneId}` });
+  const log = page.locator(`.pane-frame[data-layout-pane="${paneId}"]`).getByRole("log");
   await log.getByText(answer, { exact: true }).waitFor();
   assert.equal(await log.locator(".chat-turn-user").count(), 1);
   assert.equal((await log.innerText()).includes("PRIVATE"), false);
@@ -226,7 +226,7 @@ try {
   await insecure.addInitScript((id) => localStorage.setItem(`herdr-web-ui:view:${id}`, "chat"), paneId);
   insecure.on("pageerror", (error) => errors.push(error.message));
   await insecure.goto(`http://clipboard.test:${server.port}/?pane=${encodeURIComponent(paneId)}`);
-  const insecureLog = insecure.getByRole("log", { name: `conversation of ${paneId}` });
+  const insecureLog = insecure.locator(`.pane-frame[data-layout-pane="${paneId}"]`).getByRole("log");
   await insecureLog.getByText(answer, { exact: true }).waitFor();
   assert.equal(await insecure.evaluate(() => window.isSecureContext), false);
   assert.equal(await insecure.evaluate(() => typeof navigator.clipboard), "undefined");

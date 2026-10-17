@@ -75,9 +75,19 @@ try {
   await page.evaluate(() => window.chatFallbackQA.pane("error"));
   await summary.waitFor();
   await summary.click();
-  const fallbackError = page.getByText("Terminal output unavailable");
+  // the failure is one line naming what failed, Try again beside it (no cause is known), and the
+  // advice with the server's words folded behind Details (lib/userError.ts, ChatView FailureLine)
+  const fallbackError = page.locator(".chat-terminal-fallback [role=\"alert\"]");
   await fallbackError.waitFor();
-  assert.equal(await fallbackError.getAttribute("role"), "alert", "terminal-read failures are announced as errors");
+  assert.equal(await fallbackError.count(), 1, "terminal-read failures are announced as errors");
+  assert.equal(await fallbackError.locator(".chat-failure-line").innerText(), "Couldn't load the terminal output", "the alert names what failed, nothing more on the line");
+  assert.equal(await fallbackError.getByRole("button", { name: "Try again", exact: true }).count(), 1, "an unknown cause offers Try again");
+  const fold = fallbackError.locator("details");
+  assert.equal(await fold.locator("> summary").innerText(), "Details", "the rest is folded");
+  assert.equal(await fold.evaluate((node: HTMLDetailsElement) => node.open), false, "and folded until asked");
+  await fold.locator("> summary").click();
+  assert.ok((await fold.innerText()).includes("Try again; if it keeps failing, restart herdr web ui on the PC."), "opened, Details holds the advice");
+  assert.equal(await fold.locator("code").innerText(), "Terminal output unavailable", "and the server's words, selectable, beside it");
   assert.equal(await page.locator(".chat-empty").count(), 0, "a fallback failure is not an empty structured conversation");
   await page.evaluate(() => window.chatFallbackQA.pane("empty"));
   await page.getByText("No conversation yet — say something below", { exact: true }).waitFor();

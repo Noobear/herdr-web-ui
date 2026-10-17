@@ -548,12 +548,12 @@ try {
         try {
           await page.evaluate(() => { (window as unknown as { formDelay: number }).formDelay = 600; });
           await page.locator(".prompt-card").getByRole("button", { name: /^1\. In memory/ }).click();
-          await page.locator(".prompt-card[aria-busy=true]").waitFor();
+          await page.locator(".prompt-card-options[aria-busy=true]").waitFor();
           // the user goes on to something else while the answer is on its way
           const elsewhere = page.locator(".app-header button:not([disabled]):visible").first();
           await elsewhere.focus();
           assert.equal(await elsewhere.evaluate((node) => document.activeElement === node), true);
-          assert.equal(await page.locator(".prompt-card").getAttribute("aria-busy"), "true", "the answer is still on its way");
+          assert.equal(await page.locator(".prompt-card-options").getAttribute("aria-busy"), "true", "the answer is still on its way");
           await page.locator(".prompt-card").getByText(FORM.question).waitFor({ state: "detached" });
           assert.equal((await answersOf(page)).length, 1);
           assert.equal(await elsewhere.evaluate((node) => document.activeElement === node), true, "focus stays where the user put it while the answer was on its way");
@@ -638,11 +638,11 @@ try {
         try {
           await page.evaluate(() => { (window as unknown as { formDelay: number }).formDelay = 3500; });
           await page.locator(".prompt-card").getByRole("button", { name: /^1\. In memory/ }).click();
-          await page.locator(".prompt-card[aria-busy=true]").waitFor();
+          await page.locator(".prompt-card-options[aria-busy=true]").waitFor();
           await setPrompt(page, NEXT);
           await page.locator(".prompt-card").getByText(NEXT.question).waitFor();
           assert.equal(await page.evaluate(() => (window as unknown as { formReturned: number }).formReturned), 0, "the first answer is still on its way");
-          assert.equal(await page.locator(".prompt-card").getAttribute("aria-busy"), "false", "the next prompt is not waiting on the first one's answer");
+          assert.equal(await page.locator(".prompt-card-options").getAttribute("aria-busy"), "false", "the next prompt is not waiting on the first one's answer");
           await watchCards(page);
           const second = page.locator(".prompt-card").getByRole("button", { name: /^2\. Redis/ });
           await second.focus();
@@ -658,7 +658,7 @@ try {
           await setPrompt(page, FORM);
           await page.locator(".prompt-card").getByText(FORM.title).waitFor();
           await page.locator(".prompt-card").getByRole("button", { name: /^1\. In memory/ }).click();
-          await page.locator(".prompt-card[aria-busy=true]").waitFor();
+          await page.locator(".prompt-card-options[aria-busy=true]").waitFor();
           await setPrompt(page, NEXT);
           await page.locator(".prompt-card").getByText(NEXT.question).waitFor();
           await page.locator(".composer-text").fill("3");
@@ -704,9 +704,9 @@ try {
           await page.waitForFunction(() => (window as unknown as { cardsRemoved: number }).cardsRemoved === 2, undefined, { timeout: 15_000 });
           await page.evaluate(() => { (window as unknown as { formDelay: number }).formDelay = 3500; });
           await page.locator(".prompt-card").getByRole("button", { name: /^1\. In memory/ }).click();
-          await page.locator(".prompt-card[aria-busy=true]").waitFor();
+          await page.locator(".prompt-card-options[aria-busy=true]").waitFor();
           await setPrompt(page, AGAIN);
-          await page.locator(".prompt-card[aria-busy=false]").waitFor();
+          await page.locator(".prompt-card-options[aria-busy=false]").waitFor();
           assert.equal(await page.evaluate(() => (window as unknown as { formReturned: number }).formReturned), 0, "the first asking's answer is still on its way");
           await box.fill("3");
           await box.press("Enter");
@@ -739,10 +739,10 @@ try {
           await setPanePrompt(page, panes.docs, OTHER);
           await page.evaluate(() => { (window as unknown as { formDelay: number }).formDelay = 3500; });
           await page.locator(".prompt-card").getByRole("button", { name: /^1\. In memory/ }).click();
-          await page.locator(".prompt-card[aria-busy=true]").waitFor();
+          await page.locator(".prompt-card-options[aria-busy=true]").waitFor();
           await select(page, panes.docs);
           await page.locator(".prompt-card").getByText(OTHER.question).waitFor();
-          assert.equal(await page.locator(".prompt-card").getAttribute("aria-busy"), "false");
+          assert.equal(await page.locator(".prompt-card-options").getAttribute("aria-busy"), "false");
           await page.locator(".composer-text").fill("2");
           await page.locator(".composer-text").press("Enter");
           await page.locator(".prompt-card-confirm").waitFor();
@@ -831,7 +831,7 @@ try {
           await page.evaluate(() => { (window as unknown as { formDelay: number }).formDelay = 400; });
           await option.focus();
           await page.keyboard.press("Enter");
-          await page.locator(".prompt-card[aria-busy=true]").waitFor();
+          await page.locator(".prompt-card-options[aria-busy=true]").waitFor();
           await gone();
           assert.equal(await active(), "composer-text", "and after an answer that took a moment");
           await page.evaluate(() => { (window as unknown as { formDelay: number }).formDelay = 0; });
