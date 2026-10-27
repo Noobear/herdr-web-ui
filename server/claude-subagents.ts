@@ -251,6 +251,10 @@ interface Parent {
   promptAt: number | null;
   /** byte boundary of the session's last trustworthy turn_duration, cleared by later activity or skipped records */
   restAt: number | null;
+  /** byte boundary of the entry that began the session's latest turn: the first after a rest */
+  turnAt: number | null;
+  /** whether the latest turn goes on: no rest came after it yet */
+  turnOpen: boolean;
 }
 const parents = new Map<string, Parent>();
 
@@ -260,7 +264,7 @@ function scanParent(path: string): Parent | null {
   let parent = parents.get(path);
   if (!parent || parent.id !== stat.id || parent.offset > stat.size) {
     const from = Math.max(0, stat.size - PARENT_WINDOW);
-    parent = { id: stat.id, offset: from, skipping: from > 0, windowed: from > 0, firstAt: null, behind: false, notes: new Map(), calls: new Set(), results: new Map(), commands: noCommands(), stopCalls: new Map(), stops: new Map(), promptAt: null, restAt: null };
+    parent = { id: stat.id, offset: from, skipping: from > 0, windowed: from > 0, firstAt: null, behind: false, notes: new Map(), calls: new Set(), results: new Map(), commands: noCommands(), stopCalls: new Map(), stops: new Map(), promptAt: null, restAt: null, turnAt: null, turnOpen: false };
   }
   remember(parents, path, parent, 256);
   const state = parent;
@@ -276,11 +280,19 @@ function scanParent(path: string): Parent | null {
     state.offset = read.offset;
     state.skipping = read.skipping;
     state.behind = read.more || read.offset < stat.size || read.skipping;
-    if (read.skipping) state.restAt = null;
+    // a record skipped for its size may be a next turn's prompt
+    if (read.skipping) { state.restAt = null; openTurn(state, read.offset); }
     left -= consumed;
     if (consumed === 0) break;
   }
   return state;
+}
+
+/** What the transcript has after a rest begins the next turn, which a busy signal can be matched to (ClaudeSubagentStatus.busy). */
+function openTurn(parent: Parent, end: number): void {
+  if (parent.turnOpen) return;
+  parent.turnOpen = true;
+  parent.turnAt = end;
 }
 
 /** An `Agent` call's launch is answered at once, with an acknowledgement that is no answer. */
@@ -296,9 +308,15 @@ function scanParentLine(parent: Parent, line: string, end: number): void {
   if (line.includes('"subtype":"turn_duration"')) {
     try {
       const entry = row(JSON.parse(line));
-      if (entry?.["type"] === "system" && entry["isSidechain"] !== true) parent.restAt = stamp(entry["timestamp"]) === null ? null : end;
+      if (entry?.["type"] === "system" && entry["isSidechain"] !== true) {
+        parent.restAt = stamp(entry["timestamp"]) === null ? null : end;
+        if (parent.restAt !== null) parent.turnOpen = false;
+      }
     } catch { /* a line caught half written is read again */ }
-  } else if (/"type":"(?:user|assistant|api-request)"/.test(line) && !line.includes('"isSidechain":true')) parent.restAt = null;
+  } else if (/"type":"(?:user|assistant|api-request)"/.test(line) && !line.includes('"isSidechain":true')) {
+    parent.restAt = null;
+    openTurn(parent, end);
+  }
   const mentioned = line.includes("<task-notification>");
   const calling = line.includes('"name":"Agent"') || line.includes('"name":"Task"');
   const answering = parent.calls.size > 0 && line.includes('"tool_result"');
@@ -310,7 +328,12 @@ function scanParentLine(parent: Parent, line: string, end: number): void {
   try { entry = row(JSON.parse(line)); } catch { return; }
   if (entry === null) return;
   const at = stamp(entry["timestamp"]);
-  if (prompting && at !== null && prompted(entry)) parent.promptAt = at;
+  if (prompting && prompted(entry)) {
+    if (at !== null) parent.promptAt = at;
+    // a prompt begins a turn also where no rest ended the one before (an interrupted turn writes none)
+    parent.turnAt = end;
+    parent.turnOpen = true;
+  }
   // one line can hold all three: a batched entry, or an answer that quotes the tag
   const notices = mentioned ? blocksIn(entry).flatMap((block) => taskNotification(block) ?? []) : [];
   if (at !== null) {
@@ -1089,11 +1112,32 @@ interface Tracked {
   at: number; pidAt: number;
   live: boolean; running: number; turnRunning: number; promptAt: number | null; resting: boolean; sig: string | null;
   reset?: boolean;
-  /** A busy transition invalidates every rest already written in this transcript, even if not read yet. */
-  restAfter?: { readonly id: string; readonly size: number } | null;
+  /** the turns of the transcript read, and the busy signals matched to them */
+  turns?: Turns;
   /** every observed agent, whose own file can end or resume its turn */
   watch: string[];
 }
+
+/**
+ * What says a Claude pane's session may have begun a turn its transcript does not show yet: herdr
+ * reading it as working, or the chat sending it a prompt. Each is matched on its own, so that one
+ * turn told by both is still one turn.
+ */
+export type BusySource = "herdr" | "chat";
+
+/**
+ * The latest turn start a source's busy signal was matched to (a byte boundary of the transcript),
+ * and the transcript's size at a signal that matched none: its turn is not written yet, so only a
+ * rest written past that size ends it.
+ */
+interface Claim { turn: number; after: number }
+
+/**
+ * A transcript's turns as the busy signals have them (#2072). A rest certifies a pane at rest only
+ * when it lies past every source's `after`. `retired`: the start of the latest turn a poll saw at
+ * rest, which a later signal is never matched to.
+ */
+interface Turns { readonly path: string; readonly id: string; retired: number; herdr: Claim; chat: Claim }
 
 /**
  * The running subagents and background commands of every Claude pane, for the pane's count. Only a pane whose agent is
@@ -1109,6 +1153,8 @@ export class ClaudeSubagentStatus {
   private readonly sessions = new Map<string, string | null>();
   /** The latest lookup claim; a newer pane/session observation cancels an older answer. */
   private readonly lookups = new Map<string, { key: string }>();
+  /** busy signals heard before the pane's transcript was read: matched at its first read */
+  private readonly deferred = new Map<string, Set<BusySource>>();
   private timer: ReturnType<typeof setInterval> | null = null;
   private refreshing: Promise<void> | null = null;
   private queued: HerdrPane[] | null = null;
@@ -1129,6 +1175,7 @@ export class ClaudeSubagentStatus {
   stop(): void {
     this.lookups.clear();
     this.sessions.clear();
+    this.deferred.clear();
     this.queued = null;
     if (this.timer !== null) clearInterval(this.timer);
     this.timer = null;
@@ -1147,12 +1194,24 @@ export class ClaudeSubagentStatus {
     return tracked !== undefined && tracked.resting && tracked.running > 0;
   }
 
-  /** A new terminal turn or submitted message precedes its transcript append. */
-  beginTurn(paneId: string): void {
+  /**
+   * The pane's session may have begun a turn: herdr reads it as working, or the chat sent it a
+   * prompt. Claude writes a turn's prompt to its transcript as the turn begins, but a signal can
+   * come before that entry or after the whole turn. The transcript is read first: a turn it begins
+   * after every turn seen at rest, and after the one this source's last signal was matched to, is
+   * this signal's, late. Otherwise the turn is not written yet, and no rest written so far ends it.
+   */
+  busy(paneId: string, source: BusySource): void {
     const tracked = this.panes.get(paneId);
+    const turns = tracked?.path != null && tracked.live && tracked.turns?.path === tracked.path ? tracked.turns : undefined;
+    const size = turns ? plain(turns.path) : null;
+    // the signal's own read, ahead of the poll that would take a turn it finds at rest for history
+    const parent = turns && size?.id === turns.id ? scanParent(turns.path) : null;
+    if (turns && parent?.id === turns.id) match(turns, parent, source, turns.retired, size!.size);
+    else this.deferred.set(paneId, (this.deferred.get(paneId) ?? new Set()).add(source));
     if (!tracked) return;
-    tracked.restAfter = tracked.path === null ? null : plain(tracked.path);
     tracked.sig = null;
+    this.poll(paneId);
   }
 
   /** The transcript of the Claude session the pane holds, or last held, whether it still runs Claude, and when that process started. */
@@ -1167,6 +1226,7 @@ export class ClaudeSubagentStatus {
     for (const paneId of this.panes.keys()) if (!ids.has(paneId)) this.panes.delete(paneId);
     for (const paneId of this.lookups.keys()) if (!ids.has(paneId)) this.lookups.delete(paneId);
     for (const paneId of this.sessions.keys()) if (!ids.has(paneId)) this.sessions.delete(paneId);
+    for (const paneId of this.deferred.keys()) if (!ids.has(paneId)) this.deferred.delete(paneId);
     for (const pane of panes) {
       this.observeSession(pane);
       const key = `${pane.agent_session?.value ?? ""}\0${pane.cwd ?? ""}`;
@@ -1222,8 +1282,10 @@ export class ClaudeSubagentStatus {
       || (current.pid !== null && found.pid != null && current.pid !== found.pid)
       || (current.startedAt !== null && found.startedAt !== null && current.startedAt !== found.startedAt)));
     if (reset) this.deps.onReset?.(pane.pane_id);
+    // another process's transcript: what it holds is that process's, and a rest in it ends no turn of this one
+    if (reset && found) this.deferred.set(pane.pane_id, (this.deferred.get(pane.pane_id) ?? new Set()).add("herdr"));
     // the count it had goes on from here: another session with none says so at the next poll
-    this.panes.set(pane.pane_id, { key, path: found?.path ?? (same ? current.path : null), startedAt: found ? found.startedAt : same ? current.startedAt : null, pid: found ? found.pid ?? null : same ? current.pid : null, at: this.now(), pidAt: this.now(), live: true, running: current?.running ?? 0, turnRunning: current?.turnRunning ?? 0, promptAt: current?.promptAt ?? null, resting: current?.resting ?? false, restAfter: reset && found ? plain(found.path) : same ? current.restAfter : undefined, sig: null, watch: same && !found ? current.watch : [], reset });
+    this.panes.set(pane.pane_id, { key, path: found?.path ?? (same ? current.path : null), startedAt: found ? found.startedAt : same ? current.startedAt : null, pid: found ? found.pid ?? null : same ? current.pid : null, at: this.now(), pidAt: this.now(), live: true, running: current?.running ?? 0, turnRunning: current?.turnRunning ?? 0, promptAt: current?.promptAt ?? null, resting: current?.resting ?? false, turns: reset ? undefined : current?.turns, sig: null, watch: same && !found ? current.watch : [], reset });
   }
 
   private observeSession(pane: HerdrPane): void {
@@ -1240,7 +1302,6 @@ export class ClaudeSubagentStatus {
     if (!tracked) return;
     tracked.live = false;
     tracked.reset = true;
-    tracked.restAfter = undefined;
     // Leaving Claude retains the old transcript for the lost-task list, but a new Claude session cannot read it.
     if (session !== null) {
       tracked.path = null;
@@ -1268,10 +1329,12 @@ export class ClaudeSubagentStatus {
         const state = claudeSubagentState(tracked.path, true, this.now(), tracked.startedAt);
         ({ running, turnRunning, promptAt, resting } = state);
         const parent = parents.get(tracked.path);
-        if (tracked.restAfter !== undefined) {
-          if (tracked.restAfter === null) tracked.restAfter = plain(tracked.path);
-          resting &&= parent !== undefined && tracked.restAfter !== null
-            && (parent.id !== tracked.restAfter.id || (parent.restAt ?? 0) > tracked.restAfter.size);
+        if (parent === undefined) resting = false;
+        else {
+          const turns = this.turnsOf(paneId, tracked.path, parent);
+          // a turn seen at rest is history: no signal from here on is its own
+          if (resting && parent.turnAt !== null) turns.retired = Math.max(turns.retired, parent.turnAt);
+          resting &&= (parent.restAt ?? -1) > Math.max(turns.herdr.after, turns.chat.after);
         }
         tracked.watch = state.watch;
         const after = subagentsSignature(tracked.path, tracked.watch, this.now());
@@ -1289,6 +1352,30 @@ export class ClaudeSubagentStatus {
       this.deps.onChange(paneId, running, turnRunning, promptAt, resting);
     }
   }
+
+  /**
+   * The pane's turns in the transcript just read, begun at its first read: what that read found at
+   * rest is history, and the signals heard before it are matched against what it found.
+   */
+  private turnsOf(paneId: string, path: string, parent: Parent): Turns {
+    const tracked = this.panes.get(paneId)!;
+    if (tracked.turns?.path === path && tracked.turns.id === parent.id) return tracked.turns;
+    const turns: Turns = { path, id: parent.id, retired: -1, herdr: { turn: -1, after: -1 }, chat: { turn: -1, after: -1 } };
+    if (parent.restAt !== null && parent.turnAt !== null) turns.retired = parent.turnAt;
+    for (const source of this.deferred.get(paneId) ?? []) match(turns, parent, source, turns.retired, parent.offset);
+    this.deferred.delete(paneId);
+    tracked.turns = turns;
+    return turns;
+  }
+}
+
+/** A busy signal from `source`, read against the transcript as `parent` has it (ClaudeSubagentStatus.busy). */
+function match(turns: Turns, parent: Parent, source: BusySource, retired: number, size: number): void {
+  const claim = turns[source];
+  const latest = parent.turnAt ?? -1;
+  if (latest > Math.max(retired, claim.turn)) { claim.turn = latest; return; }
+  claim.turn = Math.max(claim.turn, latest);
+  claim.after = Math.max(claim.after, size);
 }
 
 /** Waits for `work`, but not longer than `ms`: what a slow lookup finds is there for the next ask. */

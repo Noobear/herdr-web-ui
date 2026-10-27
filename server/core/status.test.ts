@@ -164,6 +164,106 @@ describe("Claude rest evidence regressions (#2072)", () => {
   });
 });
 
+describe("Claude turn starts the transcript does not show yet (#2072)", () => {
+  const queue = (h: Awaited<ReturnType<typeof workingClaude>>) =>
+    h.pending.enqueue("owner", h.pane.pane_id, 1, "queued", null, { agent: "claude", terminalId: "test", session: h.pane.agent_session.value });
+  const turnEnds = (h: Awaited<ReturnType<typeof workingClaude>>) =>
+    appendFileSync(h.path, line({ type: "system", subtype: "turn_duration", timestamp: new Date(at + 6000).toISOString() }));
+
+  it("closes the queue for a next turn herdr tells while the subagents' spinner never left working", async () => {
+    const h = await workingClaude();
+    h.rest(); h.poll();
+    expect(h.last().status).toBe("done");
+    // When herdr says working again, with no idle between, before Claude writes the next prompt.
+    handlers.onStatus(h.pane.pane_id, "working", "claude");
+    h.poll();
+    queue(h);
+    const snapshot = await h.snapshot();
+    // Then the rest the transcript holds is the turn before's.
+    expect(h.last().status).toBe("working");
+    expect(snapshot.panes[0]?.agent_status).toBe("working");
+    expect(h.pending.current(h.pane.pane_id)).toBe("working");
+    expect(h.pending.next(h.pane.pane_id)).toBeNull();
+    // And the turn's own rest, once written, ends it.
+    h.next(); turnEnds(h); h.poll();
+    expect(h.pending.current(h.pane.pane_id)).toBe("done");
+  });
+
+  it("reaches rest when herdr's working event comes after the turn it tells has ended", async () => {
+    const h = await workingClaude();
+    handlers.onStatus(h.pane.pane_id, "idle", "claude");
+    // Given a whole next turn written before herdr's event for it arrives.
+    h.next(); turnEnds(h);
+    handlers.onStatus(h.pane.pane_id, "working", "claude");
+    queue(h);
+    h.poll();
+    // Then that turn's rest is its own.
+    expect(h.last().status).toBe("done");
+    expect(h.pending.current(h.pane.pane_id)).toBe("done");
+    expect(h.pending.next(h.pane.pane_id)).not.toBeNull();
+  });
+
+  it("reaches rest when a chat send returns after the turn it started has ended", async () => {
+    const h = await workingClaude();
+    h.rest(); h.poll();
+    h.next(); turnEnds(h);
+    noteSubmitted(h.pane.pane_id, "short question");
+    h.poll();
+    expect(h.last().status).toBe("done");
+    expect(h.pending.current(h.pane.pane_id)).toBe("done");
+  });
+
+  it("keeps the rest through a slash command the chat sent, which may run no turn", async () => {
+    const h = await workingClaude();
+    h.rest(); h.poll();
+    noteSubmitted(h.pane.pane_id, "/model sonnet");
+    h.poll();
+    const snapshot = await h.snapshot();
+    expect(h.last()).toEqual({ status: "done", tasks: 1, bg: true });
+    expect(snapshot.panes[0]?.agent_status).toBe("done");
+    expect(h.pending.current(h.pane.pane_id)).toBe("done");
+  });
+
+  it("leaves a pane herdr reads idle idle when the chat sends it a prompt", async () => {
+    const h = await workingClaude();
+    h.rest(); h.poll();
+    handlers.onStatus(h.pane.pane_id, "idle", "claude");
+    const alerts = h.alerts.length;
+    // When a send returns before herdr or the transcript tells of any turn.
+    noteSubmitted(h.pane.pane_id, "hello");
+    queue(h);
+    // Then the status stays herdr's: nothing ends a working the server made up.
+    expect(h.last().status).toBe("done");
+    expect(h.pending.current(h.pane.pane_id)).toBe("done");
+    expect(h.pending.next(h.pane.pane_id)).not.toBeNull();
+    expect(h.alerts.slice(alerts)).not.toContain("working");
+  });
+
+  it("keeps working when herdr's working event came before the transcript was first found", async () => {
+    const id = "44444444-4444-4444-8444-444444444444";
+    const path = join(root, `${id}.jsonl`);
+    const dir = join(root, id, "subagents");
+    mkdirSync(dir, { recursive: true });
+    // Given a transcript whose last turn ended long ago, with a subagent still at work.
+    writeFileSync(path, line({ type: "user", timestamp: new Date(at - 1000).toISOString(), message: { role: "user", content: "old" } })
+      + line({ type: "system", subtype: "turn_duration", timestamp: new Date(at + 300).toISOString() }));
+    writeFileSync(join(dir, "agent-a1.meta.json"), JSON.stringify({ agentType: "reviewer", toolUseId: "toolu_a1", requestShape: "background" }));
+    writeFileSync(join(dir, "agent-a1.jsonl"), line({ type: "user", isSidechain: true, agentId: "a1", sessionId: id, timestamp: new Date(at).toISOString(), message: { role: "user", content: "review" } }));
+    const pane = { ...claude, agent_status: "working", agent_session: { ...claude.agent_session, value: id } };
+    const h = hub(path);
+    h.herdrSays(pane);
+    // When herdr's working event comes before the pane's transcript is looked up.
+    handlers.onStatus(pane.pane_id, "working", "claude");
+    await h.snapshot();
+    h.poll();
+    h.pending.enqueue("owner", pane.pane_id, 1, "queued", null, { agent: "claude", terminalId: "test", session: id });
+    // Then the old rest ends no turn begun since.
+    expect(h.last().status).toBe("working");
+    expect(h.pending.current(pane.pane_id)).toBe("working");
+    expect(h.pending.next(pane.pane_id)).toBeNull();
+  });
+});
+
 describe("the status hub's Claude turn at rest under its background subagent", () => {
   // the session's turn starts a background subagent, which works on after the turn ends
   const RESTING = "22222222-2222-4222-8222-222222222222";
