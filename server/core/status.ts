@@ -159,20 +159,22 @@ export function createStatusHub<Owner, Lease>({ options, devices, preferences, c
    * herdr's raw word on a Claude pane; a projection or a tracker callback never is. Its working
    * event may be a turn the transcript does not show yet (ClaudeSubagentStatus.busy), even with no
    * idle before it: the subagents' spinner keeps herdr at working across turns. A snapshot or a
-   * replay says so only when it moves the pane to working.
+   * replay says so only when it moves a pane heard before to working: the first one heard of is
+   * at work since before it was looked at, as its transcript says.
    */
   function hearClaude(paneId: string, agent: string | null | undefined, status: AgentStatus, event: boolean): void {
     if (agent !== "claude") { heard.delete(paneId); return; }
     const before = heard.get(paneId);
     heard.set(paneId, status);
-    if (status === "working" && (event || before !== "working")) claudeAgents.busy(paneId, "herdr");
+    if (status === "working" && (event || (before !== undefined && before !== "working"))) claudeAgents.busy(paneId, "herdr");
+    else if (status !== "working" && event) claudeAgents.quiet(paneId);
   }
   // a prompt the chat sent may be a turn the transcript does not show yet. Not so a slash command,
   // which can run with no turn (`/model`), nor a message Claude Code may hold: what they start is
   // told by the transcript. The status stays herdr's: a pane it reads idle is not made working
-  const stopSubmitted = onChatSubmitted((paneId, prompt) => {
+  const stopSubmitted = onChatSubmitted((paneId, prompt, sentAt) => {
     if (!prompt || agentNow.get(paneId) !== "claude" || omo.runs(paneId) || gjc.runs(paneId)) return;
-    claudeAgents.busy(paneId, "chat");
+    claudeAgents.busy(paneId, "chat", sentAt);
   });
   /** OpenCode panes count their subagents too: child sessions in OpenCode's store (server/opencode-subagents.ts) */
   const opencodeAgents = new OpencodeSubagentStatus({

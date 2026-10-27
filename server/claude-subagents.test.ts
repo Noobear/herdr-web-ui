@@ -1386,6 +1386,15 @@ describe("claudeSubagents, background commands", () => {
     expect(claudeSubagentState(s.path, true, NOW).resting).toBe(false);
   });
 
+  it("lists a running subagent while the session's last line is still being written, which certifies no rest (#2072)", () => {
+    const s = session();
+    s.prompt(1);
+    s.agent("review", { steps: [[2, 1]] });
+    s.parent({ type: "system", subtype: "turn_duration", isSidechain: false, timestamp: at(3) });
+    appendFileSync(s.path, JSON.stringify({ type: "user", timestamp: at(4), message: { role: "user", content: "next" } }));
+    expect(claudeSubagentState(s.path, true, NOW)).toMatchObject({ tasks: [{ id: "review", status: "running" }], resting: false });
+  });
+
   it("does not count an old subagent's tool result as a new dispatch", () => {
     const s = session();
     s.prompt(1);

@@ -190,19 +190,24 @@ export function commandSendFrom(pane: HerdrPane, agent: string, commands: SlashC
     ...(sessionChange ? { sessionChange: { terminalId: pane.terminal_id } } : {}) };
 }
 
-const submittedListeners = new Set<(paneId: string, prompt: boolean) => void>();
+type SubmittedListener = (paneId: string, prompt: boolean, sentAt: number | undefined) => void;
+const submittedListeners = new Set<SubmittedListener>();
 
 /**
  * Each successful chat send, as it returns. `prompt`: it is a prompt, which begins a turn; a
  * slash command may run with none, and Claude Code may hold a message with invisible characters.
+ * `sentAt`: when the send's Enter was sent, where its sender knows.
  */
-export function onChatSubmitted(listener: (paneId: string, prompt: boolean) => void): () => void {
+export function onChatSubmitted(listener: SubmittedListener): () => void {
   submittedListeners.add(listener);
   return () => { submittedListeners.delete(listener); };
 }
 
-/** A message the chat just sent to a pane: one with invisible characters may be held by Claude Code. */
-export function noteSubmitted(paneId: string, text: string, command?: PaneCommandSend): void {
+/**
+ * A message the chat just sent to a pane: one with invisible characters may be held by Claude Code.
+ * `sentAt`: taken right before the key (or herdr's prompt call) that submitted it.
+ */
+export function noteSubmitted(paneId: string, text: string, command?: PaneCommandSend, sentAt?: number): void {
   const previous = chatSent.get(paneId)?.commands ?? [];
   const reservations = chatSent.get(paneId)?.reservations ?? new CommandReservations();
   reservations.close(command?.text ?? text, command?.at ?? Date.now());
@@ -216,7 +221,7 @@ export function noteSubmitted(paneId: string, text: string, command?: PaneComman
   const prompt = !INVISIBLE_CHAR_RE.test(text) && !text.trimStart().startsWith("/");
   // the message is sent: what a listener makes of it must not turn the send into a failure
   for (const listener of submittedListeners) {
-    try { listener(paneId, prompt); } catch (error) { console.error(`chat send on ${paneId}: a listener failed: ${error instanceof Error ? error.message : String(error)}`); }
+    try { listener(paneId, prompt, sentAt); } catch (error) { console.error(`chat send on ${paneId}: a listener failed: ${error instanceof Error ? error.message : String(error)}`); }
   }
 }
 

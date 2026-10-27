@@ -539,6 +539,7 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
       committing(steering);
       // Claude Code queues what Enter commits during a turn; Ctrl+Enter sends it now (#737). herdr
       // encodes the key as the pane asked, and as a plain CR for a program that asked for nothing.
+      const sentAt = Date.now();
       await paneSendKeys(paneId, [steering && beforeEnter.identity.agent === "claude" ? "ctrl+enter" : "Enter"], undefined, allowed);
       // This proves only that Ovis committed Enter to Pi, not that Pi accepted, queued or recorded
       // the message. Keep a non-resendable receipt until the bound JSONL active branch appends it.
@@ -558,7 +559,7 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
         // write is refused when the lease, the deadline or the pane's status moved meanwhile
         escape: (fresh) => paneSendKeys(paneId, ["Escape"], undefined, () => allowed() && fresh() && pending.current(paneId) === statusAtRead),
       });
-      noteSubmitted(paneId, sent, command);
+      noteSubmitted(paneId, sent, command, sentAt);
       if (command) watch?.commit(command, prompt, attached);
       return { ok: true };
     } catch (error) {

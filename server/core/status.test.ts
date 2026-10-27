@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, setSystemTime } from "bun:test";
 import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { noteSubmitted } from "../prompt.ts";
@@ -203,20 +203,109 @@ describe("Claude turn starts the transcript does not show yet (#2072)", () => {
     expect(h.pending.next(h.pane.pane_id)).not.toBeNull();
   });
 
-  it("reaches rest when a chat send returns after the turn it started has ended", async () => {
+  it("reaches rest when a chat send returns after the turn it started has ended and been read", async () => {
     const h = await workingClaude();
     h.rest(); h.poll();
+    // Given the send's whole turn written, and read at rest, before its send returns.
+    h.next(); turnEnds(h); h.poll();
+    noteSubmitted(h.pane.pane_id, "short question", undefined, at + 4000);
+    h.poll();
+    // Then the turn begun after its Enter is its own.
+    expect(h.last().status).toBe("done");
+    expect(h.pending.current(h.pane.pane_id)).toBe("done");
+  });
+
+  it("keeps working for a turn after one the same signal source already waited for", async () => {
+    const h = await workingClaude();
+    h.rest(); h.poll();
+    // Given herdr telling turn B before Claude writes it, and B written whole before the next read.
+    handlers.onStatus(h.pane.pane_id, "working", "claude");
     h.next(); turnEnds(h);
-    noteSubmitted(h.pane.pane_id, "short question");
+    // When herdr tells turn C before Claude writes it.
+    handlers.onStatus(h.pane.pane_id, "working", "claude");
+    queue(h);
+    // Then B is the first signal's, and C has no rest yet.
+    expect(h.last().status).toBe("working");
+    expect(h.pending.next(h.pane.pane_id)).toBeNull();
+  });
+
+  it("keeps working when the chat sends a prompt after a terminal turn it did not start", async () => {
+    const h = await workingClaude();
+    h.rest(); h.poll();
+    // Given turn B typed in the terminal and ended, not read yet.
+    h.next(); turnEnds(h);
+    // When the chat's prompt C returns before Claude writes it.
+    noteSubmitted(h.pane.pane_id, "new prompt", undefined, at + 5500);
+    queue(h);
+    // Then B, begun before C's Enter, is not C's.
+    expect(h.last().status).toBe("working");
+    expect(h.pending.next(h.pane.pane_id)).toBeNull();
+  });
+
+  it("reaches rest when herdr's working event for a turn already read at rest comes after an idle one", async () => {
+    const h = await workingClaude();
+    h.rest(); h.poll();
+    handlers.onStatus(h.pane.pane_id, "idle", "claude");
+    // Given turn B written and read at rest before herdr's working event for it.
+    h.next(); turnEnds(h); h.poll();
+    handlers.onStatus(h.pane.pane_id, "working", "claude");
+    queue(h);
+    // Then B, the first turn begun since herdr said idle, is that event's.
+    expect(h.last().status).toBe("done");
+    expect(h.pending.next(h.pane.pane_id)).not.toBeNull();
+  });
+
+  it("reaches rest when the chat's message was taken into the turn at work", async () => {
+    const h = await workingClaude();
+    // Given a message Claude takes into its turn at work, and the turn's end, before the send returns.
+    appendFileSync(h.path, line({ type: "attachment", timestamp: new Date(at + 200).toISOString(), attachment: { type: "queued_command", commandMode: "prompt", prompt: "also check docs" } }));
+    h.rest();
+    noteSubmitted(h.pane.pane_id, "also check docs", undefined, at + 100);
     h.poll();
     expect(h.last().status).toBe("done");
     expect(h.pending.current(h.pane.pane_id)).toBe("done");
   });
 
-  it("keeps the rest through a slash command the chat sent, which may run no turn", async () => {
+  it("lets go of a signal whose turn is never written once it waited", async () => {
+    const h = await workingClaude();
+    h.rest(); h.poll();
+    // When herdr says working again with nothing to place it, and no turn follows.
+    handlers.onStatus(h.pane.pane_id, "working", "claude");
+    expect(h.last().status).toBe("working");
+    setSystemTime(Date.now() + 6000);
+    try {
+      h.poll();
+      // Then the pane is back at rest, not held working while the subagent streams.
+      expect(h.last().status).toBe("done");
+      expect(h.pending.current(h.pane.pane_id)).toBe("done");
+    } finally { setSystemTime(); }
+  });
+
+  it("finds a pane at rest under its subagents' spinner when the server starts", async () => {
+    const old = await workingClaude();
+    old.rest();
+    // Given a server that first reads the pane working, its turn's rest already written.
+    const h = hub(old.path);
+    const pane = { ...old.pane, agent_status: "working" };
+    h.herdrSays(pane);
+    handlers.onBaseline([pane]);
+    await h.snapshot();
+    h.poll();
+    const snapshot = await h.snapshot();
+    expect(snapshot.panes[0]?.agent_status).toBe("done");
+    expect(h.pending.current(pane.pane_id)).toBe("done");
+  });
+
+  it("keeps the rest through a slash command, which runs no turn", async () => {
     const h = await workingClaude();
     h.rest(); h.poll();
     noteSubmitted(h.pane.pane_id, "/model sonnet");
+    // the entries Claude Code writes for a local command
+    const ts = (ms: number) => new Date(at + ms).toISOString();
+    appendFileSync(h.path, line({ type: "user", isMeta: true, timestamp: ts(6000), message: { role: "user", content: "<local-command-caveat>Caveat: The messages below were generated by the user while running local commands.</local-command-caveat>" } })
+      + line({ type: "user", timestamp: ts(6001), message: { role: "user", content: "<command-name>/model</command-name>\n<command-message>model</command-message>\n<command-args>sonnet</command-args>" } })
+      + line({ type: "user", timestamp: ts(6002), message: { role: "user", content: "<local-command-stdout>Set model to sonnet</local-command-stdout>" } })
+      + line({ type: "system", subtype: "local_command", timestamp: ts(6003), content: "<local-command-stdout>Set model to sonnet</local-command-stdout>" }));
     h.poll();
     const snapshot = await h.snapshot();
     expect(h.last()).toEqual({ status: "done", tasks: 1, bg: true });
