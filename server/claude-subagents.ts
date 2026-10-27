@@ -128,7 +128,7 @@ export function lineNotifications(line: string): TaskNotification[] {
  * one that does not fit READ_BUDGET is skipped, not waited for. `more`: the file goes on past
  * what this read looked at.
  */
-export function readLines(path: string, from: number, size: number, limit: number, each: (line: string) => void, skipping: boolean): { offset: number; skipping: boolean; more: boolean; failed?: true } {
+export function readLines(path: string, from: number, size: number, limit: number, each: (line: string, end: number) => void, skipping: boolean): { offset: number; skipping: boolean; more: boolean; failed?: true } {
   let fd: number;
   try { fd = openSync(path, "r"); } catch { return { offset: from, skipping, more: true, failed: true }; }
   try {
@@ -154,7 +154,11 @@ export function readLines(path: string, from: number, size: number, limit: numbe
       // a line larger than the whole budget is given up; a shorter one waits for a larger share
       return more && limit >= READ_BUDGET ? { offset: from + got, skipping: true, more } : { offset: from + start, skipping: false, more };
     }
-    for (const line of buffer.subarray(start, end).toString("utf8").split("\n")) if (line.length > 0) each(line);
+    let offset = from + start;
+    for (const line of buffer.subarray(start, end).toString("utf8").split("\n")) {
+      offset += Buffer.byteLength(line) + 1;
+      if (line.length > 0) each(line, offset);
+    }
     return { offset: from + end, skipping: false, more };
   } catch { return { offset: from, skipping, more: true, failed: true }; } finally { closeSync(fd); }
 }
@@ -245,7 +249,7 @@ interface Parent {
   stops: Map<string, number>;
   /** when the person last gave a prompt: the turn going on, or last ended, began there */
   promptAt: number | null;
-  /** when the session's own turn ended (its `turn_duration` entry), while nothing of a next one is written: it rests */
+  /** byte boundary of the session's last trustworthy turn_duration, cleared by later activity or skipped records */
   restAt: number | null;
 }
 const parents = new Map<string, Parent>();
@@ -263,14 +267,16 @@ function scanParent(path: string): Parent | null {
   if (state.offset >= stat.size) state.behind = false;
   // the first read takes the whole window, a chunk at a time; after that a call reads what was appended
   for (let left = PARENT_WINDOW; state.offset < stat.size && left > 0;) {
-    const read = readLines(path, state.offset, stat.size, READ_BUDGET, (line) => {
+    if (state.skipping) state.restAt = null;
+    const read = readLines(path, state.offset, stat.size, READ_BUDGET, (line, end) => {
       if (state.firstAt === null) state.firstAt = stamp(line.match(/"timestamp":"([^"]+)"/)?.[1]);
-      scanParentLine(state, line);
+      scanParentLine(state, line, end);
     }, state.skipping);
     const consumed = read.offset - state.offset;
     state.offset = read.offset;
     state.skipping = read.skipping;
-    state.behind = read.more;
+    state.behind = read.more || read.offset < stat.size || read.skipping;
+    if (read.skipping) state.restAt = null;
     left -= consumed;
     if (consumed === 0) break;
   }
@@ -285,12 +291,12 @@ function acknowledgement(entry: Row, block: Row): boolean {
   return words.startsWith("Async agent launched");
 }
 
-function scanParentLine(parent: Parent, line: string): void {
+function scanParentLine(parent: Parent, line: string, end: number): void {
   // Claude closes the session's turn with a `turn_duration` entry; a next turn writes its request, prompt or answer first
   if (line.includes('"subtype":"turn_duration"')) {
     try {
       const entry = row(JSON.parse(line));
-      if (entry?.["type"] === "system" && entry["isSidechain"] !== true) parent.restAt = stamp(entry["timestamp"]);
+      if (entry?.["type"] === "system" && entry["isSidechain"] !== true) parent.restAt = stamp(entry["timestamp"]) === null ? null : end;
     } catch { /* a line caught half written is read again */ }
   } else if (/"type":"(?:user|assistant|api-request)"/.test(line) && !line.includes('"isSidechain":true')) parent.restAt = null;
   const mentioned = line.includes("<task-notification>");
@@ -1083,6 +1089,8 @@ interface Tracked {
   at: number; pidAt: number;
   live: boolean; running: number; turnRunning: number; promptAt: number | null; resting: boolean; sig: string | null;
   reset?: boolean;
+  /** A busy transition invalidates every rest already written in this transcript, even if not read yet. */
+  restAfter?: { readonly id: string; readonly size: number } | null;
   /** every observed agent, whose own file can end or resume its turn */
   watch: string[];
 }
@@ -1137,6 +1145,14 @@ export class ClaudeSubagentStatus {
   restsOn(paneId: string): boolean {
     const tracked = this.panes.get(paneId);
     return tracked !== undefined && tracked.resting && tracked.running > 0;
+  }
+
+  /** A new terminal turn or submitted message precedes its transcript append. */
+  beginTurn(paneId: string): void {
+    const tracked = this.panes.get(paneId);
+    if (!tracked) return;
+    tracked.restAfter = tracked.path === null ? null : plain(tracked.path);
+    tracked.sig = null;
   }
 
   /** The transcript of the Claude session the pane holds, or last held, whether it still runs Claude, and when that process started. */
@@ -1207,7 +1223,7 @@ export class ClaudeSubagentStatus {
       || (current.startedAt !== null && found.startedAt !== null && current.startedAt !== found.startedAt)));
     if (reset) this.deps.onReset?.(pane.pane_id);
     // the count it had goes on from here: another session with none says so at the next poll
-    this.panes.set(pane.pane_id, { key, path: found?.path ?? (same ? current.path : null), startedAt: found ? found.startedAt : same ? current.startedAt : null, pid: found ? found.pid ?? null : same ? current.pid : null, at: this.now(), pidAt: this.now(), live: true, running: current?.running ?? 0, turnRunning: current?.turnRunning ?? 0, promptAt: current?.promptAt ?? null, resting: current?.resting ?? false, sig: null, watch: same && !found ? current.watch : [], reset });
+    this.panes.set(pane.pane_id, { key, path: found?.path ?? (same ? current.path : null), startedAt: found ? found.startedAt : same ? current.startedAt : null, pid: found ? found.pid ?? null : same ? current.pid : null, at: this.now(), pidAt: this.now(), live: true, running: current?.running ?? 0, turnRunning: current?.turnRunning ?? 0, promptAt: current?.promptAt ?? null, resting: current?.resting ?? false, restAfter: reset && found ? plain(found.path) : same ? current.restAfter : undefined, sig: null, watch: same && !found ? current.watch : [], reset });
   }
 
   private observeSession(pane: HerdrPane): void {
@@ -1224,6 +1240,7 @@ export class ClaudeSubagentStatus {
     if (!tracked) return;
     tracked.live = false;
     tracked.reset = true;
+    tracked.restAfter = undefined;
     // Leaving Claude retains the old transcript for the lost-task list, but a new Claude session cannot read it.
     if (session !== null) {
       tracked.path = null;
@@ -1250,6 +1267,12 @@ export class ClaudeSubagentStatus {
         if (`${before.sig}:${tracked.startedAt}` === tracked.sig) continue;
         const state = claudeSubagentState(tracked.path, true, this.now(), tracked.startedAt);
         ({ running, turnRunning, promptAt, resting } = state);
+        const parent = parents.get(tracked.path);
+        if (tracked.restAfter !== undefined) {
+          if (tracked.restAfter === null) tracked.restAfter = plain(tracked.path);
+          resting &&= parent !== undefined && tracked.restAfter !== null
+            && (parent.id !== tracked.restAfter.id || (parent.restAt ?? 0) > tracked.restAfter.size);
+        }
         tracked.watch = state.watch;
         const after = subagentsSignature(tracked.path, tracked.watch, this.now());
         // Certify only the versions and dependency set read, never a concurrent append's newer signature.

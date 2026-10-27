@@ -190,6 +190,14 @@ export function commandSendFrom(pane: HerdrPane, agent: string, commands: SlashC
     ...(sessionChange ? { sessionChange: { terminalId: pane.terminal_id } } : {}) };
 }
 
+const submittedListeners = new Set<(paneId: string) => void>();
+
+/** Status consumers invalidate prior-turn evidence as soon as a chat send succeeds. */
+export function onChatSubmitted(listener: (paneId: string) => void): () => void {
+  submittedListeners.add(listener);
+  return () => { submittedListeners.delete(listener); };
+}
+
 /** A message the chat just sent to a pane: one with invisible characters may be held by Claude Code. */
 export function noteSubmitted(paneId: string, text: string, command?: PaneCommandSend): void {
   const previous = chatSent.get(paneId)?.commands ?? [];
@@ -202,6 +210,7 @@ export function noteSubmitted(paneId: string, text: string, command?: PaneComman
   if (chatSent.size > 128) chatSent.delete(chatSent.keys().next().value!);
   if (INVISIBLE_CHAR_RE.test(text)) heldCandidates.set(paneId, { text, at: Date.now() });
   else heldCandidates.delete(paneId);
+  for (const listener of submittedListeners) listener(paneId);
 }
 
 /** The text of the pane's last successful chat send (noteSubmitted), or none. */
