@@ -1369,6 +1369,23 @@ describe("claudeSubagents, background commands", () => {
     expect(claudeSubagentState(s.path, true, NOW).turnRunning).toBe(1);
   });
 
+  it("says the session's turn rests from its turn_duration entry until a next turn writes anything (#2069)", () => {
+    const s = session();
+    s.prompt(1);
+    s.agent("review", { steps: [[2, 1]] });
+    expect(claudeSubagentState(s.path, true, NOW).resting).toBe(false);
+    s.parent({ type: "assistant", timestamp: at(3), message: { role: "assistant", stop_reason: "end_turn", content: [{ type: "text", text: "OK" }] } });
+    s.parent({ type: "system", subtype: "turn_duration", isSidechain: false, timestamp: at(3) });
+    // what Claude writes between turns moves nothing
+    s.parent({ type: "last-prompt", lastPrompt: "go" });
+    expect(claudeSubagentState(s.path, true, NOW)).toMatchObject({ running: 1, resting: true });
+    forgetSubagents();
+    expect(claudeSubagentState(s.path, true, NOW).resting).toBe(true);
+    // the subagent's notice is a next turn's request first
+    s.parent({ type: "api-request", timestamp: at(4) });
+    expect(claudeSubagentState(s.path, true, NOW).resting).toBe(false);
+  });
+
   it("does not count an old subagent's tool result as a new dispatch", () => {
     const s = session();
     s.prompt(1);

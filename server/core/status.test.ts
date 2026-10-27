@@ -1,6 +1,6 @@
 import { afterAll, afterEach, describe, expect, it, mock, spyOn } from "bun:test";
 import { Database } from "bun:sqlite";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -61,7 +61,7 @@ const claude = { ...base, agent: "claude", agent_session: { agent: "claude", sou
 
 let hubs = 0;
 /** The status hub with herdr, OpenCode's service and the Claude lookup stood in for; what a browser and web push are sent. */
-function hub() {
+function hub(path = transcript) {
   let panes: unknown[] = [];
   let gate: Promise<void> | null = null;
   const answer = () => ({ agents: [], layouts: [], panes: structuredClone(panes), protocol: 1, tabs: [], version: "test", workspaces: [] });
@@ -69,7 +69,7 @@ function hub() {
     spyOn(herdr, "sessionSnapshot").mockImplementation(async () => { const read = answer(); if (gate) await gate; return read as never; }),
     spyOn(herdr, "paneGet").mockImplementation(async () => structuredClone(panes[0]) as never),
     spyOn(service, "readOpenCodeService").mockReturnValue(null),
-    spyOn(conversation, "claudePaneSession").mockResolvedValue({ path: transcript, startedAt: null, pid: null } as never),
+    spyOn(conversation, "claudePaneSession").mockResolvedValue({ path, startedAt: null, pid: null } as never),
     spyOn(conversation, "claudePanePid").mockResolvedValue(null as never),
   );
   const frames: { type: string; agent_status?: string; background_tasks?: number; background_wait?: boolean }[] = [];
@@ -103,6 +103,8 @@ function hub() {
       const frame = frames.filter((seen) => seen.type === "pane-status").at(-1);
       return { status: frame?.agent_status, tasks: frame?.background_tasks ?? 0, bg: frame?.background_wait === true };
     },
+    /** the Claude tracker's poll, as its timer runs it */
+    poll: () => status.claudeAgents.poll(),
     /** the lookups and reads a status event set off */
     settle: () => new Promise((resolve) => setTimeout(resolve, 0)),
   };
@@ -162,5 +164,41 @@ describe("the status hub's OpenCode subagents", () => {
     await h.snapshot();
     handlers.onStatus("w1:p1", "idle", "claude");
     expect(h.last().bg).toBe(false);
+  });
+});
+
+describe("the status hub's Claude turn at rest under its background subagent", () => {
+  // the session's turn starts a background subagent, which works on after the turn ends
+  const RESTING = "22222222-2222-4222-8222-222222222222";
+  const path = join(root, `${RESTING}.jsonl`);
+  const line = (value: unknown) => `${JSON.stringify(value)}\n`;
+  const ts = (ms: number) => new Date(at + ms).toISOString();
+  mkdirSync(join(root, RESTING, "subagents"), { recursive: true });
+  writeFileSync(path, line({ type: "user", origin: { kind: "human" }, timestamp: ts(-1000), permissionMode: "default", message: { role: "user", content: "go" } }));
+  writeFileSync(join(root, RESTING, "subagents", "agent-b1.meta.json"), JSON.stringify({ agentType: "general-purpose", description: "essays", toolUseId: "toolu_b1", requestShape: "background" }));
+  writeFileSync(join(root, RESTING, "subagents", "agent-b1.jsonl"), line({ isSidechain: true, sessionId: RESTING, agentId: "b1", type: "user", timestamp: ts(0), message: { role: "user", content: "write" } }));
+  const pane = { ...claude, agent_session: { ...claude.agent_session, value: RESTING } };
+
+  it("takes herdr's working for a rest held on the subagent, and herdr's word again once a next turn starts (#2069)", async () => {
+    const h = hub(path);
+    h.herdrSays(pane);
+    handlers.onBaseline([pane]);
+    await h.snapshot();
+    h.herdrSays({ ...pane, agent_status: "working" });
+    handlers.onStatus("w1:p1", "working", "claude");
+    expect(h.last().status).toBe("working");
+    // the turn ends (its `turn_duration` entry), and Claude's busy title stays up while the subagent streams: herdr says nothing new
+    appendFileSync(path, line({ type: "assistant", isSidechain: false, timestamp: ts(200), message: { role: "assistant", stop_reason: "end_turn", content: [{ type: "text", text: "OK" }] } })
+      + line({ type: "system", subtype: "turn_duration", isSidechain: false, timestamp: ts(300), pendingBackgroundAgentCount: 1 }));
+    h.poll();
+    expect(h.last()).toEqual({ status: "done", tasks: 1, bg: true });
+    expect(h.alerts.at(-1)).toBe("working");
+    // a snapshot read meanwhile says the same
+    await h.snapshot();
+    expect(h.last()).toEqual({ status: "done", tasks: 1, bg: true });
+    // the person prompts again while the subagent works: the session is at work, as herdr has said all along
+    appendFileSync(path, line({ type: "user", origin: { kind: "human" }, timestamp: ts(5000), permissionMode: "default", message: { role: "user", content: "next" } }));
+    h.poll();
+    expect(h.last().status).toBe("working");
   });
 });

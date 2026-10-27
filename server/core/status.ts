@@ -141,8 +141,25 @@ export function createStatusHub<Owner, Lease>({ options, devices, preferences, c
       const agent = agentNow.get(paneId) ?? null;
       if (owns(paneId, "claude")) newLifetime(paneId, agent === "claude" ? null : agent);
     },
-    onChange: (paneId, running, turnRunning, promptAt) => { if (owns(paneId, "claude")) claudeAgentsChanged(paneId, running, turnRunning, promptAt); },
+    onChange: (paneId, running, turnRunning, promptAt) => { if (owns(paneId, "claude")) claudeAgentsChanged(paneId, running, turnRunning, promptAt, false, "claude"); },
   });
+  /** herdr's last word on each Claude pane, before restingClaude took it for a rest */
+  const heard = new Map<string, AgentStatus>();
+  /**
+   * herdr's status for a pane, as the session's own transcript has it: Claude keeps its busy title
+   * up while a background subagent works after its turn ended, and herdr reads `working` (#2069).
+   * That pane rests, and background-wait.ts holds it as waiting on that work.
+   */
+  function restingClaude(paneId: string, agent: string | null | undefined, status: AgentStatus): AgentStatus {
+    if (agent !== "claude") return status;
+    heard.set(paneId, status);
+    if (status !== "working" || omo.runs(paneId) || gjc.runs(paneId)) return status;
+    // read now: the work that spins the title started after the tracker's last poll
+    const was = settling;
+    settling = paneId;
+    try { claudeAgents.poll(paneId); } finally { settling = was; }
+    return claudeAgents.restsOn(paneId) ? "idle" : status;
+  }
   /** OpenCode panes count their subagents too: child sessions in OpenCode's store (server/opencode-subagents.ts) */
   const opencodeAgents = new OpencodeSubagentStatus({
     store: () => options.opencodeDb ?? opencodeDatabasePath(),
@@ -212,7 +229,7 @@ export function createStatusHub<Owner, Lease>({ options, devices, preferences, c
     void claudeAgents.refresh(named.panes).catch(() => undefined).then(() => plans.refresh(named.panes)).catch(() => undefined);
     void opencodeAgents.refresh(named.panes, read);
     // an agent this server started has had no turn yet: its start screen is no work (launched-agents.ts)
-    for (const pane of named.panes) pane.agent_status = launchedAgents.settle(pane.pane_id, pane.agent_status);
+    for (const pane of named.panes) pane.agent_status = restingClaude(pane.pane_id, pane.agent, launchedAgents.settle(pane.pane_id, pane.agent_status));
     options.openCodeState?.reconcile(named.panes, promptCheckpoint);
     return named;
   };
@@ -317,9 +334,14 @@ export function createStatusHub<Owner, Lease>({ options, devices, preferences, c
    * the alerts took it for working meanwhile, so a wait that ends with no turn after it is that
    * turn's finish, told then.
    */
-  function claudeAgentsChanged(paneId: string, running: number, turnRunning: number, promptAt: number | null, resetHold = false): void {
+  function claudeAgentsChanged(paneId: string, running: number, turnRunning: number, promptAt: number | null, resetHold = false, agent: string | null = null): void {
     const changed = waits.running(paneId, turnRunning, promptAt) || resetHold;
     if (paneId === settling) return;
+    // a pane herdr reads as working: its session's turn came to rest under its subagents' spinner, or moved on again
+    if (agent === "claude" && heard.get(paneId) === "working" && (completions.current(paneId) === "working") === claudeAgents.restsOn(paneId)) {
+      onStatus(paneId, "working", "claude");
+      return;
+    }
     const status = completions.current(paneId);
     // a pane never reported here carries its count in the next snapshot
     if (status === undefined) return;
@@ -346,65 +368,68 @@ export function createStatusHub<Owner, Lease>({ options, devices, preferences, c
   // a bridge (no roster of its own) tells its connection server instead (#555)
   const bridgeAgents = machines ? null : bridgeAgentNews(() => broadcastAll({ type: "session-changed" }));
 
+  /** A status herdr reported for a pane, or one read back from a snapshot around a gap (`replay`). */
+  function onStatus(paneId: string, read: AgentStatus, agent: string | null, replay?: { before: AgentStatus; agent: string | null }): void {
+    if (agent !== "opencode") {
+      options.openCodeState?.forget(paneId);
+      // no longer an OpenCode pane: it holds OpenCode's event stream open no more
+      releaseOpenCodePane(paneId);
+    }
+    const raw = restingClaude(paneId, agent, launchedAgents.settle(paneId, read));
+    gjc.poll();
+    // read back from a snapshot around a gap between subscriptions. An OmO pane's status there
+    // is OmO's own or herdr's by turns (server/omo-status.ts), and a difference is no change;
+    // a GJC pane's may be a provider child's while gjc's own transcript is tracked
+    if (replay && (omo.runs(paneId) || gjc.tracks(paneId) || !completions.replayed(paneId, raw, replay))) return;
+    // Native OmO discovery owns the pane even when herdr names its provider child.
+    if (reconcileProviderStatus(omo, gjc, { pane_id: paneId, agent })) completions.forget(paneId);
+    // the frame below names no agent: one herdr names anew is read into the roster now. An OmO
+    // pane is `omo` in every snapshot, whatever herdr calls it in an event
+    const named = [{ pane_id: paneId, agent: omo.runs(paneId) ? "omo" : gjc.runs(paneId) ? "gjc" : agent }];
+    if (machines) machines.localAgents(named); else bridgeAgents!.status(named);
+    // newer than the last snapshot: a route that looks the pane's session up before the next one reads it so
+    agentNow.set(paneId, named[0]!.agent ?? null);
+    agentRead.set(paneId, opencodeAgents.beginRead());
+    if (eventAgent.get(paneId)?.agent !== (named[0]!.agent ?? null)) eventAgent.set(paneId, { agent: named[0]!.agent ?? null, since: statusNow() });
+    // herdr says `claude/idle` for an OmO pane whatever it does, and a provider child's work for
+    // a GJC one while its transcript is tracked: their own status stands, and no Claude turn waits there
+    // (an OmO pane's wait on its background tasks is omoChanged's)
+    if (omo.tracks(paneId)) return;
+    if (gjc.tracks(paneId)) {
+      waits.forget(paneId);
+      return;
+    }
+    // back at work, the agent has had its answer, maybe from a terminal: the same prompt on
+    // its screen after this is another asking, which an answer to the old card must not take.
+    // Only for a status that counts: a replay that changed nothing and herdr's word on an OmO
+    // pane (omoChanged has OmO's own) end no asking
+    if (raw === "working") promptWaitEnded(paneId);
+    // an agent herdr lost on the way still works and finishes as such (server/completion.ts);
+    // an OmO pane whose session is not known keeps herdr's status, under its own name
+    const status = completions.observe(paneId, raw, omo.runs(paneId) ? "omo" : gjc.runs(paneId) ? "gjc" : agent);
+    pending.status(paneId, status); drainPending(paneId);
+    // a Claude turn that ended holds on its background work: what it started is read now, while
+    // the pane is still taken for the status before (work that ended before the turn did holds
+    // nothing), and this frame says all of it, so none says the pane finished first
+    // so does an OpenCode turn on the subagents it started
+    const tracker = omo.runs(paneId) ? null : agent === "claude" ? claudeAgents : agent === "opencode" ? opencodeAgents : null;
+    if (tracker !== null) {
+      settling = paneId;
+      try { void tracker.poll(paneId); } finally { settling = null; }
+      waits.status(paneId, status);
+    } else waits.forget(paneId);
+    broadcastAll(paneStatus(paneId, status, tracker !== null ? { background_tasks: tracker.countOf(paneId) } : {}));
+    push.onStatus(paneId, alertStatus(status, waits.waiting(paneId))).catch(logPushError);
+    // an OpenCode turn whose session is not known yet: its pane is looked up now, not at the next snapshot, so a
+    // turn that ended on its subagents is held while the finish alert still waits (and is called off)
+    if (tracker === opencodeAgents && opencodeAgents.sessionOf(paneId)?.live !== true) {
+      const begun = opencodeAgents.beginRead();
+      void paneGet(paneId).then((pane) => { if (opencodeAgents.ensure(pane, begun)) void opencodeAgents.poll(paneId); }).catch(() => undefined);
+    }
+  }
+
   const collector = startStatusCollector({
-    onStatus: (paneId, read, agent, replay) => {
-      if (agent !== "opencode") {
-        options.openCodeState?.forget(paneId);
-        // no longer an OpenCode pane: it holds OpenCode's event stream open no more
-        releaseOpenCodePane(paneId);
-      }
-      const raw = launchedAgents.settle(paneId, read);
-      gjc.poll();
-      // read back from a snapshot around a gap between subscriptions. An OmO pane's status there
-      // is OmO's own or herdr's by turns (server/omo-status.ts), and a difference is no change;
-      // a GJC pane's may be a provider child's while gjc's own transcript is tracked
-      if (replay && (omo.runs(paneId) || gjc.tracks(paneId) || !completions.replayed(paneId, raw, replay))) return;
-      // Native OmO discovery owns the pane even when herdr names its provider child.
-      if (reconcileProviderStatus(omo, gjc, { pane_id: paneId, agent })) completions.forget(paneId);
-      // the frame below names no agent: one herdr names anew is read into the roster now. An OmO
-      // pane is `omo` in every snapshot, whatever herdr calls it in an event
-      const named = [{ pane_id: paneId, agent: omo.runs(paneId) ? "omo" : gjc.runs(paneId) ? "gjc" : agent }];
-      if (machines) machines.localAgents(named); else bridgeAgents!.status(named);
-      // newer than the last snapshot: a route that looks the pane's session up before the next one reads it so
-      agentNow.set(paneId, named[0]!.agent ?? null);
-      agentRead.set(paneId, opencodeAgents.beginRead());
-      if (eventAgent.get(paneId)?.agent !== (named[0]!.agent ?? null)) eventAgent.set(paneId, { agent: named[0]!.agent ?? null, since: statusNow() });
-      // herdr says `claude/idle` for an OmO pane whatever it does, and a provider child's work for
-      // a GJC one while its transcript is tracked: their own status stands, and no Claude turn waits there
-      // (an OmO pane's wait on its background tasks is omoChanged's)
-      if (omo.tracks(paneId)) return;
-      if (gjc.tracks(paneId)) {
-        waits.forget(paneId);
-        return;
-      }
-      // back at work, the agent has had its answer, maybe from a terminal: the same prompt on
-      // its screen after this is another asking, which an answer to the old card must not take.
-      // Only for a status that counts: a replay that changed nothing and herdr's word on an OmO
-      // pane (omoChanged has OmO's own) end no asking
-      if (raw === "working") promptWaitEnded(paneId);
-      // an agent herdr lost on the way still works and finishes as such (server/completion.ts);
-      // an OmO pane whose session is not known keeps herdr's status, under its own name
-      const status = completions.observe(paneId, raw, omo.runs(paneId) ? "omo" : gjc.runs(paneId) ? "gjc" : agent);
-      pending.status(paneId, status); drainPending(paneId);
-      // a Claude turn that ended holds on its background work: what it started is read now, while
-      // the pane is still taken for the status before (work that ended before the turn did holds
-      // nothing), and this frame says all of it, so none says the pane finished first
-      // so does an OpenCode turn on the subagents it started
-      const tracker = omo.runs(paneId) ? null : agent === "claude" ? claudeAgents : agent === "opencode" ? opencodeAgents : null;
-      if (tracker !== null) {
-        settling = paneId;
-        try { void tracker.poll(paneId); } finally { settling = null; }
-        waits.status(paneId, status);
-      } else waits.forget(paneId);
-      broadcastAll(paneStatus(paneId, status, tracker !== null ? { background_tasks: tracker.countOf(paneId) } : {}));
-      push.onStatus(paneId, alertStatus(status, waits.waiting(paneId))).catch(logPushError);
-      // an OpenCode turn whose session is not known yet: its pane is looked up now, not at the next snapshot, so a
-      // turn that ended on its subagents is held while the finish alert still waits (and is called off)
-      if (tracker === opencodeAgents && opencodeAgents.sessionOf(paneId)?.live !== true) {
-        const begun = opencodeAgents.beginRead();
-        void paneGet(paneId).then((pane) => { if (opencodeAgents.ensure(pane, begun)) void opencodeAgents.poll(paneId); }).catch(() => undefined);
-      }
-    },
+    onStatus,
     // a finish reported as done, now in front at herdr's terminal: seen, idle again
     onFocus: (paneId) => {
       // The split canvas follows herdr's focused pane (also the sole visible pane while zoomed).
