@@ -1397,7 +1397,8 @@ describe("claudeSubagents, background commands", () => {
     s.parent({ type: "user", timestamp: at(4), message: { role: "user", content: "<local-command-stdout>Set model to sonnet</local-command-stdout>" } });
     expect(claudeSubagentState(s.path, true, NOW)).toMatchObject({ resting: true, promptAt: Date.parse(at(1)) });
     // a skill: its echo, then the skill's own text
-    s.parent({ type: "user", origin: { kind: "human" }, timestamp: at(5), message: { role: "user", content: "<command-message>review-pr</command-message>\n<command-name>/review-pr</command-name>" } });
+    // as Claude Code records it: neither `origin` nor a permission mode
+    s.parent({ type: "user", timestamp: at(5), message: { role: "user", content: "<command-message>review-pr</command-message>\n<command-name>/review-pr</command-name>" } });
     s.parent({ type: "user", isMeta: true, timestamp: at(5), message: { role: "user", content: [{ type: "text", text: "Review the PR." }] } });
     expect(claudeSubagentState(s.path, true, NOW)).toMatchObject({ resting: false, promptAt: Date.parse(at(5)) });
   });

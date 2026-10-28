@@ -331,6 +331,18 @@ const COMMAND_ECHO_RE = /"content":"<(?:command-name|command-message|command-arg
 const LOCAL_OUTPUT_RE = /"content":"<local-command-(?:stdout|stderr)>/;
 const LOCAL_CAVEAT_RE = /"content":"<local-command-caveat>/;
 
+/**
+ * A slash command's echo is the person's prompt too, though Claude Code writes it with neither
+ * `origin` nor a permission mode (server/fixtures/skill-invocations/claude.jsonl). One marked as
+ * another's (a notice's `origin`) is not.
+ */
+function echoed(entry: Row, line: string): boolean {
+  if (entry["isMeta"] === true || entry["isSidechain"] === true || !COMMAND_ECHO_RE.test(line)) return false;
+  const origin = entry["origin"];
+  const kind = typeof origin === "string" ? origin : row(origin)?.["kind"];
+  return kind === undefined || kind === "human";
+}
+
 /** An `Agent` call's launch is answered at once, with an acknowledgement that is no answer. */
 function acknowledgement(entry: Row, block: Row): boolean {
   if (row(entry["toolUseResult"])?.["status"] === "async_launched") return true;
@@ -383,7 +395,7 @@ function scanParentLine(parent: Parent, line: string, end: number): void {
   try { entry = row(JSON.parse(line)); } catch { return; }
   if (entry === null) return;
   const at = stamp(entry["timestamp"]);
-  if (prompting && !local && prompted(entry)) {
+  if (prompting && !local && (prompted(entry) || echoed(entry, line))) {
     if (at !== null) parent.promptAt = at;
     // a prompt begins a turn also where no rest ended the one before (an interrupted turn writes none)
     addStart(parent, { end, at, turn: true });
