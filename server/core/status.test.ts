@@ -374,7 +374,7 @@ describe("Claude turn starts the transcript does not show yet (#2072)", () => {
     expect(h.pending.next(h.pane.pane_id)).toBeNull();
   });
 
-  it("keeps the rest through a bash-mode command, which runs no turn", async () => {
+  it("keeps the rest through bash-mode records written with no model turn after them", async () => {
     const h = await workingClaude();
     h.rest(); h.poll();
     // the entries Claude Code writes for \`!ls\`

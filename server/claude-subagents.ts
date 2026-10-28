@@ -336,7 +336,10 @@ const commandOf = (line: string): string | null =>
   line.match(/"role":"user","content":"\/([^"\s\\]+)/)?.[1]
   ?? line.match(/"content":"(?:<command-message>[^<]*<\/command-message>(?:\\n|\s)*)?<command-name>\/?([^<\s]+)<\/command-name>/)?.[1] ?? null;
 const LOCAL_OUTPUT_RE = /"content":"<local-command-(?:stdout|stderr)>/;
-/** Bash mode (\`!ls\`): its command and output, which Claude Code writes as user entries and runs no turn for. */
+/**
+ * Bash mode (\`!ls\`): its command and output, which Claude Code writes as user entries. They begin no
+ * turn of their own; one that follows (2.1.311 answers the output) writes its request first.
+ */
 const BASH_RE = /"content":"<bash-(?:input|stdout|stderr)>/;
 const LOCAL_CAVEAT_RE = /"content":"<local-command-caveat>/;
 
