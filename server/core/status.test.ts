@@ -307,6 +307,20 @@ describe("Claude turn starts the transcript does not show yet (#2072)", () => {
     expect(h.pending.next(h.pane.pane_id)).toBeNull();
   });
 
+  it("closes the queue when a skill begins a turn, before Claude's first answer", async () => {
+    const h = await workingClaude();
+    h.rest(); h.poll();
+    // the entries Claude Code writes as a skill or custom command begins
+    const ts = (ms: number) => new Date(at + ms).toISOString();
+    appendFileSync(h.path, line({ type: "user", timestamp: ts(5000), message: { role: "user", content: "<command-message>review-pr</command-message>\n<command-name>/review-pr</command-name>\n<command-args>12</command-args>" } })
+      + line({ type: "user", isMeta: true, timestamp: ts(5000), message: { role: "user", content: [{ type: "text", text: "Review the PR.\n\nARGUMENTS: 12" }] } })
+      + line({ type: "attachment", timestamp: ts(5001), attachment: { type: "environment" } }));
+    h.poll();
+    queue(h);
+    expect(h.last().status).toBe("working");
+    expect(h.pending.next(h.pane.pane_id)).toBeNull();
+  });
+
   it("keeps the rest through a slash command, which runs no turn", async () => {
     const h = await workingClaude();
     h.rest(); h.poll();

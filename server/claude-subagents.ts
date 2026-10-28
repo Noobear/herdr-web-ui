@@ -262,6 +262,8 @@ interface Parent {
   starts: Start[];
   /** whether the latest turn goes on: no rest came after it yet */
   turnOpen: boolean;
+  /** what a slash command's echo found, until the next entry says whether it began a turn (scanParentLine) */
+  echo: { restAt: number | null; promptAt: number | null; turnOpen: boolean; starts: Start[] } | null;
 }
 interface Start { end: number; at: number | null; turn: boolean }
 
@@ -280,7 +282,7 @@ function scanParent(path: string): Parent | null {
   let parent = parents.get(path);
   if (!parent || parent.id !== stat.id || parent.offset > stat.size) {
     const from = Math.max(0, stat.size - PARENT_WINDOW);
-    parent = { id: stat.id, offset: from, skipping: from > 0, windowed: from > 0, firstAt: null, behind: false, notes: new Map(), calls: new Set(), results: new Map(), commands: noCommands(), stopCalls: new Map(), stops: new Map(), promptAt: null, restAt: null, whole: false, starts: [], turnOpen: false };
+    parent = { id: stat.id, offset: from, skipping: from > 0, windowed: from > 0, firstAt: null, behind: false, notes: new Map(), calls: new Set(), results: new Map(), commands: noCommands(), stopCalls: new Map(), stops: new Map(), promptAt: null, restAt: null, whole: false, starts: [], turnOpen: false, echo: null };
   }
   remember(parents, path, parent, 256);
   const state = parent;
@@ -298,7 +300,7 @@ function scanParent(path: string): Parent | null {
     state.behind = read.more;
     state.whole = read.offset >= stat.size && !read.skipping;
     // a record skipped for its size may be a next turn's prompt
-    if (read.skipping) { state.restAt = null; openTurn(state, read.offset, null); }
+    if (read.skipping) { state.restAt = null; state.echo = null; openTurn(state, read.offset, null); }
     left -= consumed;
     if (consumed === 0) break;
   }
@@ -320,11 +322,14 @@ function addStart(parent: Parent, start: Start): void {
 }
 
 /**
- * A slash command's echo, its caveat and its output, which Claude Code writes as user entries: a
- * command such as `/model` runs no turn. One that does (a skill, `/compact`) writes the turn's own
- * entries next. Other `isMeta` entries (a task notification) can begin a turn, and do.
+ * A slash command's echo, which Claude Code writes as a user entry, begins a turn as a prompt does:
+ * a skill or a custom command runs one. A local command (`/model`) runs none, and writes its output
+ * right after the echo (`<local-command-stdout>`, as a user entry or a `local_command` one), with
+ * its caveat before it: that output takes back what the echo began.
  */
-const COMMAND_ECHO_RE = /"content":"<(?:command-name|command-message|command-args|local-command-(?:stdout|stderr|caveat))>/;
+const COMMAND_ECHO_RE = /"content":"<(?:command-name|command-message|command-args)>/;
+const LOCAL_OUTPUT_RE = /"content":"<local-command-(?:stdout|stderr)>/;
+const LOCAL_CAVEAT_RE = /"content":"<local-command-caveat>/;
 
 /** An `Agent` call's launch is answered at once, with an acknowledgement that is no answer. */
 function acknowledgement(entry: Row, block: Row): boolean {
@@ -335,9 +340,21 @@ function acknowledgement(entry: Row, block: Row): boolean {
 }
 
 function scanParentLine(parent: Parent, line: string, end: number): void {
+  const user = line.includes('"type":"user"');
+  const local = !line.includes('"isSidechain":true') && ((user && (LOCAL_OUTPUT_RE.test(line) || LOCAL_CAVEAT_RE.test(line))) || line.includes('"subtype":"local_command"'));
   // Claude closes the session's turn with a `turn_duration` entry; a next turn writes its request, prompt or answer first.
   // A `progress` entry carries a subagent's message inside it: the subagent's, not the session's
-  if (line.includes('"subtype":"turn_duration"')) {
+  if (local) {
+    const echo = parent.echo;
+    if (echo !== null && LOCAL_OUTPUT_RE.test(line)) {
+      parent.restAt = echo.restAt;
+      parent.promptAt = echo.promptAt;
+      parent.turnOpen = echo.turnOpen;
+      parent.starts = echo.starts;
+      parent.echo = null;
+    }
+  } else if (line.includes('"subtype":"turn_duration"')) {
+    parent.echo = null;
     try {
       const entry = row(JSON.parse(line));
       if (entry?.["type"] === "system" && entry["isSidechain"] !== true) {
@@ -345,7 +362,8 @@ function scanParentLine(parent: Parent, line: string, end: number): void {
         if (parent.restAt !== null) parent.turnOpen = false;
       }
     } catch { /* a line caught half written is read again */ }
-  } else if (/"type":"(?:user|assistant|api-request)"/.test(line) && !line.includes('"isSidechain":true') && !line.includes('"type":"progress"') && !(line.includes('"type":"user"') && COMMAND_ECHO_RE.test(line))) {
+  } else if (/"type":"(?:user|assistant|api-request)"/.test(line) && !line.includes('"isSidechain":true') && !line.includes('"type":"progress"')) {
+    parent.echo = user && COMMAND_ECHO_RE.test(line) ? { restAt: parent.restAt, promptAt: parent.promptAt, turnOpen: parent.turnOpen, starts: [...parent.starts] } : null;
     parent.restAt = null;
     openTurn(parent, end, stamp(line.match(/"timestamp":"([^"]+)"/)?.[1]));
   } else if (line.includes('"queued_command"') && !line.includes('"isSidechain":true')) {
@@ -365,7 +383,7 @@ function scanParentLine(parent: Parent, line: string, end: number): void {
   try { entry = row(JSON.parse(line)); } catch { return; }
   if (entry === null) return;
   const at = stamp(entry["timestamp"]);
-  if (prompting && prompted(entry) && !COMMAND_ECHO_RE.test(line)) {
+  if (prompting && !local && prompted(entry)) {
     if (at !== null) parent.promptAt = at;
     // a prompt begins a turn also where no rest ended the one before (an interrupted turn writes none)
     addStart(parent, { end, at, turn: true });

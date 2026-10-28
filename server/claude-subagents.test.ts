@@ -1386,6 +1386,22 @@ describe("claudeSubagents, background commands", () => {
     expect(claudeSubagentState(s.path, true, NOW).resting).toBe(false);
   });
 
+  it("takes a skill's echo for a prompt, and a local command's output back from its echo (#2072)", () => {
+    const s = session();
+    s.prompt(1);
+    s.agent("review", { steps: [[2, 1]] });
+    s.parent({ type: "system", subtype: "turn_duration", isSidechain: false, timestamp: at(3) });
+    // a local command: caveat, echo, output
+    s.parent({ type: "user", isMeta: true, timestamp: at(4), message: { role: "user", content: "<local-command-caveat>Caveat</local-command-caveat>" } });
+    s.parent({ type: "user", origin: { kind: "human" }, timestamp: at(4), message: { role: "user", content: "<command-name>/model</command-name>\n<command-message>model</command-message>\n<command-args>sonnet</command-args>" } });
+    s.parent({ type: "user", timestamp: at(4), message: { role: "user", content: "<local-command-stdout>Set model to sonnet</local-command-stdout>" } });
+    expect(claudeSubagentState(s.path, true, NOW)).toMatchObject({ resting: true, promptAt: Date.parse(at(1)) });
+    // a skill: its echo, then the skill's own text
+    s.parent({ type: "user", origin: { kind: "human" }, timestamp: at(5), message: { role: "user", content: "<command-message>review-pr</command-message>\n<command-name>/review-pr</command-name>" } });
+    s.parent({ type: "user", isMeta: true, timestamp: at(5), message: { role: "user", content: [{ type: "text", text: "Review the PR." }] } });
+    expect(claudeSubagentState(s.path, true, NOW)).toMatchObject({ resting: false, promptAt: Date.parse(at(5)) });
+  });
+
   it("lists a running subagent while the session's last line is still being written, which certifies no rest (#2072)", () => {
     const s = session();
     s.prompt(1);
