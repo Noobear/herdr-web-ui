@@ -266,19 +266,69 @@ describe("Claude turn starts the transcript does not show yet (#2072)", () => {
     expect(h.pending.current(h.pane.pane_id)).toBe("done");
   });
 
-  it("lets go of a signal whose turn is never written once it waited", async () => {
+  it("shows a signal whose turn is never written at rest once it waited, and holds the queue until herdr says the pane does no work", async () => {
     const h = await workingClaude();
     h.rest(); h.poll();
     // When herdr says working again with nothing to place it, and no turn follows.
     handlers.onStatus(h.pane.pane_id, "working", "claude");
+    queue(h);
     expect(h.last().status).toBe("working");
     setSystemTime(Date.now() + 6000);
     try {
       h.poll();
-      // Then the pane is back at rest, not held working while the subagent streams.
+      // Then the pane is shown at rest again, not working while the subagent streams,
       expect(h.last().status).toBe("done");
-      expect(h.pending.current(h.pane.pane_id)).toBe("done");
+      expect((await h.snapshot()).panes[0]?.agent_status).toBe("done");
+      // but its time running out proves no turn ended: the queue waits on.
+      expect(h.pending.next(h.pane.pane_id)).toBeNull();
     } finally { setSystemTime(); }
+    // herdr's word that the pane does no work lets it go.
+    handlers.onStatus(h.pane.pane_id, "idle", "claude");
+    expect(h.pending.next(h.pane.pane_id)).not.toBeNull();
+  });
+
+  it("holds the queue on a signal that waited in vain until a rest is written past it", async () => {
+    const h = await workingClaude();
+    h.rest(); h.poll();
+    handlers.onStatus(h.pane.pane_id, "idle", "claude");
+    // When herdr tells a turn whose first entry is not written within the hold.
+    handlers.onStatus(h.pane.pane_id, "working", "claude");
+    queue(h);
+    setSystemTime(Date.now() + 6000);
+    try {
+      h.poll();
+      expect(h.pending.next(h.pane.pane_id)).toBeNull();
+    } finally { setSystemTime(); }
+    // Then that turn, written late, holds the queue until its own rest.
+    h.next(); h.poll();
+    expect(h.pending.next(h.pane.pane_id)).toBeNull();
+    turnEnds(h); h.poll();
+    expect(h.pending.current(h.pane.pane_id)).toBe("done");
+    expect(h.pending.next(h.pane.pane_id)).not.toBeNull();
+  });
+
+  it("keeps working when herdr tells the next turn after a terminal turn that ended unseen", async () => {
+    const h = await workingClaude();
+    h.rest(); h.poll();
+    // Given terminal turn B begun and ended between polls, with no herdr word for it.
+    h.next(); turnEnds(h);
+    // When herdr tells turn C before Claude writes it.
+    handlers.onStatus(h.pane.pane_id, "working", "claude");
+    queue(h);
+    // Then B's rest is not C's.
+    expect(h.last().status).toBe("working");
+    expect((await h.snapshot()).panes[0]?.agent_status).toBe("working");
+    expect(h.pending.next(h.pane.pane_id)).toBeNull();
+  });
+
+  it("takes a person's prompt that quotes a local command's output for a turn", async () => {
+    const h = await workingClaude();
+    h.rest(); h.poll();
+    appendFileSync(h.path, line({ type: "user", origin: { kind: "human" }, permissionMode: "default", timestamp: new Date(at + 5000).toISOString(), message: { role: "user", content: "<local-command-stdout>example</local-command-stdout> Explain this format." } }));
+    h.poll();
+    queue(h);
+    expect(h.last().status).toBe("working");
+    expect(h.pending.next(h.pane.pane_id)).toBeNull();
   });
 
   it("finds a pane at rest under its subagents' spinner when the server starts", async () => {

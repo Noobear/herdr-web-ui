@@ -353,7 +353,10 @@ function acknowledgement(entry: Row, block: Row): boolean {
 
 function scanParentLine(parent: Parent, line: string, end: number): void {
   const user = line.includes('"type":"user"');
-  const local = !line.includes('"isSidechain":true') && ((user && (LOCAL_OUTPUT_RE.test(line) || LOCAL_CAVEAT_RE.test(line))) || line.includes('"subtype":"local_command"'));
+  // Claude writes a local command's caveat and output with neither `origin` nor a permission mode, as a
+  // person's prompt never is: a prompt that quotes these tags is the person's, and begins a turn
+  const own = !line.includes('"origin":') && !line.includes('"permissionMode":');
+  const local = !line.includes('"isSidechain":true') && ((user && own && (LOCAL_OUTPUT_RE.test(line) || (LOCAL_CAVEAT_RE.test(line) && line.includes('"isMeta":true')))) || line.includes('"subtype":"local_command"'));
   // Claude closes the session's turn with a `turn_duration` entry; a next turn writes its request, prompt or answer first.
   // A `progress` entry carries a subagent's message inside it: the subagent's, not the session's
   if (local) {
@@ -1205,14 +1208,19 @@ interface Signal { source: BusySource; at: number; sentAt?: number; quiet?: { id
 interface Barrier { size: number; at: number }
 
 /**
- * How long a signal waits for its turn to be written. Claude writes a turn's first entry as the
- * turn begins, so one that has none by then began no turn (a message taken into a turn already at
- * work, a status herdr repeated); the pane is not held working for it any longer.
+ * How long a signal holds the pane shown working while its turn is not written. Claude writes a
+ * turn's first entry as the turn begins, so one that has none by then most likely began no turn (a
+ * message taken into a turn already at work, a status herdr repeated). Most likely is no proof:
+ * the queue stays held on it (`held`) until a rest is written past it or herdr says the pane does
+ * no work.
  */
 const BUSY_HOLD_MS = 5000;
 
-/** The start of the latest turn a source's signals were matched to, and its signals still waiting for theirs. */
-interface Claim { turn: number; barriers: Barrier[] }
+/**
+ * The start of the latest turn a source's signals were matched to, its signals still waiting for
+ * theirs, and those that waited BUSY_HOLD_MS in vain (`held`): they hold the queue, not the display.
+ */
+interface Claim { turn: number; barriers: Barrier[]; held: Barrier[] }
 
 /**
  * A transcript's turns as the busy signals have them (#2072). A rest certifies a pane at rest only
@@ -1271,6 +1279,12 @@ export class ClaudeSubagentStatus {
    * The session's own turn ended while subagents or commands still run: Claude keeps its busy
    * title up while a background subagent works, and herdr reads that as `working` (#2069).
    */
+  /** Signals that waited for their turn in vain hold the pane's queue: nothing proves they began no turn. */
+  holdsQueue(paneId: string): boolean {
+    const turns = this.panes.get(paneId)?.turns;
+    return turns !== undefined && turns.herdr.held.length + turns.chat.held.length > 0;
+  }
+
   restsOn(paneId: string): boolean {
     const tracked = this.panes.get(paneId);
     return tracked !== undefined && tracked.resting && tracked.running > 0;
@@ -1301,10 +1315,15 @@ export class ClaudeSubagentStatus {
     this.poll(paneId);
   }
 
-  /** herdr's event says the pane does no work: a turn it tells of next begins in what is written after now. */
-  quiet(paneId: string): void {
+  /**
+   * herdr says the pane does no work: the signals holding its queue began nothing that still runs.
+   * Said in an event (`event`), a turn it tells of next begins in what is written after now.
+   */
+  quiet(paneId: string, event: boolean): void {
     const tracked = this.panes.get(paneId);
     if (!tracked) return;
+    if (tracked.turns) for (const claim of [tracked.turns.herdr, tracked.turns.chat]) claim.held = [];
+    if (!event) return;
     const stat = tracked.path !== null && tracked.live ? plain(tracked.path) : null;
     if (stat !== null && tracked.path !== null) tracked.quiet = { path: tracked.path, id: stat.id, size: stat.size };
     else delete tracked.quiet;
@@ -1462,7 +1481,7 @@ export class ClaudeSubagentStatus {
   private turnsOf(paneId: string, path: string, parent: Parent): Turns {
     const tracked = this.panes.get(paneId)!;
     if (tracked.turns?.path === path && tracked.turns.id === parent.id) return tracked.turns;
-    const turns: Turns = { path, id: parent.id, retired: -1, herdr: { turn: -1, barriers: [] }, chat: { turn: -1, barriers: [] } };
+    const turns: Turns = { path, id: parent.id, retired: -1, herdr: { turn: -1, barriers: [], held: [] }, chat: { turn: -1, barriers: [], held: [] } };
     if (parent.restAt !== null) turns.retired = turnAt(parent) ?? -1;
     for (const signal of this.deferred.get(paneId) ?? []) match(turns, parent, signal, parent.offset);
     this.deferred.delete(paneId);
@@ -1478,8 +1497,9 @@ const startsFor = (parent: Parent, source: BusySource): Start[] => source === "c
  * A busy signal, read against the transcript as `parent` has it (ClaudeSubagentStatus.busy). The
  * signals waiting before it take their turns first. Then a turn it can be placed in is its own:
  * for a chat send, the first begun since its Enter; for herdr's, the first begun past herdr's last
- * word that the pane did no work; with nothing to place it, the latest that no signal told and
- * no poll saw at rest. Otherwise its turn is not written yet, and it waits for it.
+ * word that the pane did no work; with nothing to place it, the turn going on if no signal told
+ * it (for a chat send with no time, the latest no signal told and no poll saw at rest). Otherwise
+ * its turn is not written yet, and it waits for it.
  */
 function match(turns: Turns, parent: Parent, signal: Signal, size: number): void {
   settle(turns, parent, null);
@@ -1490,7 +1510,14 @@ function match(turns: Turns, parent: Parent, signal: Signal, size: number): void
   if (claim.barriers.length === 0) {
     if (signal.sentAt !== undefined) start = starts.find((each) => each.end > claim.turn && each.at !== null && each.at >= signal.sentAt!);
     else if (signal.quiet?.id === parent.id) start = starts.find((each) => each.end > Math.max(claim.turn, signal.quiet!.size));
-    else start = lastStart(starts, (each) => each.end > Math.max(claim.turn, turns.retired, other.turn));
+    else {
+      const floor = Math.max(claim.turn, turns.retired, other.turn);
+      // herdr's working with nothing to place it may be the next turn's, before its first entry: a
+      // turn already at rest is not taken for it, unseen by a poll or not. A chat send's time is
+      // always known where it is sent; without it, the latest turn no signal told is the send's
+      if (signal.source === "chat") start = lastStart(starts, (each) => each.end > floor);
+      else if (parent.turnOpen) start = lastStart(starts, (each) => each.turn && each.end > floor && each.end === turnAt(parent));
+    }
   }
   if (start !== undefined) claim.turn = start.end;
   else claim.barriers.push({ size, at: signal.at });
@@ -1507,7 +1534,12 @@ function settle(turns: Turns, parent: Parent, now: number | null): void {
       claim.turn = start.end;
       claim.barriers.shift();
     }
-    if (now !== null) claim.barriers = claim.barriers.filter((barrier) => now - barrier.at < BUSY_HOLD_MS);
+    if (now !== null) {
+      claim.held.push(...claim.barriers.filter((barrier) => now - barrier.at >= BUSY_HOLD_MS));
+      claim.barriers = claim.barriers.filter((barrier) => now - barrier.at < BUSY_HOLD_MS);
+    }
+    // a rest written past a held signal ends whatever turn it began
+    claim.held = claim.held.filter((barrier) => parent.restAt === null || parent.restAt <= barrier.size);
   }
 }
 

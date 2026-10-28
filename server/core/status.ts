@@ -167,7 +167,14 @@ export function createStatusHub<Owner, Lease>({ options, devices, preferences, c
     const before = heard.get(paneId);
     heard.set(paneId, status);
     if (status === "working" && (event || (before !== undefined && before !== "working"))) claudeAgents.busy(paneId, "herdr");
-    else if (status !== "working" && event) claudeAgents.quiet(paneId);
+    else if (status !== "working") claudeAgents.quiet(paneId, event);
+  }
+  /**
+   * The status the pane's queued input goes by: a Claude pane shown at rest while a busy signal
+   * whose turn was never written holds it (ClaudeSubagentStatus.holdsQueue) is not ready for it.
+   */
+  function queueStatus(paneId: string, status: AgentStatus): AgentStatus {
+    return heard.get(paneId) === "working" && agentNow.get(paneId) === "claude" && claudeAgents.holdsQueue(paneId) && (status === "idle" || status === "done") ? "working" : status;
   }
   // a prompt the chat sent may be a turn the transcript does not show yet. Not so a slash command,
   // which can run with no turn (`/model`), nor a message Claude Code may hold: what they start is
@@ -446,7 +453,7 @@ export function createStatusHub<Owner, Lease>({ options, devices, preferences, c
     // an agent herdr lost on the way still works and finishes as such (server/completion.ts);
     // an OmO pane whose session is not known keeps herdr's status, under its own name
     const status = completions.observe(paneId, raw, omo.runs(paneId) ? "omo" : gjc.runs(paneId) ? "gjc" : agent);
-    pending.status(paneId, status); drainPending(paneId);
+    pending.status(paneId, queueStatus(paneId, status)); drainPending(paneId);
     // a Claude turn that ended holds on its background work: what it started is read now, while
     // the pane is still taken for the status before (work that ended before the turn did holds
     // nothing), and this frame says all of it, so none says the pane finished first
@@ -476,7 +483,7 @@ export function createStatusHub<Owner, Lease>({ options, devices, preferences, c
       // a browser set to follow herdr's focus opens the pane (#311)
       broadcastAll({ type: "pane-focused", pane_id: paneId });
       if (!completions.seen(paneId)) return;
-      pending.status(paneId, "idle"); drainPending(paneId);
+      pending.status(paneId, queueStatus(paneId, "idle")); drainPending(paneId);
       broadcastAll(paneStatus(paneId, "idle"));
       push.onStatus(paneId, alertStatus("idle", waits.waiting(paneId))).catch(logPushError);
     },
@@ -490,7 +497,7 @@ export function createStatusHub<Owner, Lease>({ options, devices, preferences, c
         // known ready baseline can schedule a fresh guarded check even when the tracker
         // still remembers working; an unknown baseline never supplies that permission.
         const status = pane.agent_status === "idle" || pane.agent_status === "done" ? pane.agent_status : completions.current(pane.pane_id) ?? pane.agent_status;
-        pending.status(pane.pane_id, status); drainPending(pane.pane_id);
+        pending.status(pane.pane_id, queueStatus(pane.pane_id, status)); drainPending(pane.pane_id);
       }
     },
     // a pane created a moment ago got its agent after the roster's own read of it. After the
@@ -502,7 +509,7 @@ export function createStatusHub<Owner, Lease>({ options, devices, preferences, c
       const projected = panes.map((pane) => ({ ...pane, agent_status: restingClaude(pane.pane_id, pane.agent, pane.agent_status) }));
       finishes.resync(completions, projected, newer);
       const settled = (pane: HerdrPane): AgentStatus => completions.current(pane.pane_id) ?? pane.agent_status;
-      for (const pane of panes) { pending.status(pane.pane_id, settled(pane)); drainPending(pane.pane_id); }
+      for (const pane of panes) { pending.status(pane.pane_id, queueStatus(pane.pane_id, settled(pane))); drainPending(pane.pane_id); }
       for (const pane of panes) if (!newer.has(pane.pane_id) && (pane.agent === "claude" || pane.agent === "opencode")) waits.status(pane.pane_id, settled(pane));
       push.resync(panes.map((pane) => ({ ...pane, agent_status: alertStatus(settled(pane), waits.waiting(pane.pane_id)) })), newer);
     },
@@ -539,5 +546,6 @@ export function createStatusHub<Owner, Lease>({ options, devices, preferences, c
   const untrackOpenCode = trackVerifiedOpenCodePanes((paneId) => collector.trackPane(paneId));
   const tracked = { ...collector, stop() { untrackOpenCode(); stopMutes(); stopSubmitted(); collector.stop(); } };
 
-  return { push, omo, gjc, claudeAgents, opencodeAgents, plans, clientSnapshot, countVisit, machines, broadcastAll, logPushError, collector: tracked, waitTimer };
+  const queueHeld = (paneId: string): boolean => queueStatus(paneId, "idle") === "working";
+  return { push, omo, gjc, claudeAgents, opencodeAgents, plans, clientSnapshot, queueHeld, countVisit, machines, broadcastAll, logPushError, collector: tracked, waitTimer };
 }
