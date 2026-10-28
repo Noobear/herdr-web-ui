@@ -296,6 +296,17 @@ describe("Claude turn starts the transcript does not show yet (#2072)", () => {
     expect(h.pending.current(pane.pane_id)).toBe("done");
   });
 
+  it("closes the queue when a task notification Claude marks as its own (isMeta) begins a turn", async () => {
+    const h = await workingClaude();
+    h.rest(); h.poll();
+    // When another task's notification resumes Claude before its first answer is written.
+    appendFileSync(h.path, line({ type: "user", isMeta: true, userType: "external", timestamp: new Date(at + 4000).toISOString(), message: { role: "user", content: "<task-notification><task-id>other</task-id><status>completed</status></task-notification>" } }));
+    h.poll();
+    queue(h);
+    expect(h.last().status).toBe("working");
+    expect(h.pending.next(h.pane.pane_id)).toBeNull();
+  });
+
   it("keeps the rest through a slash command, which runs no turn", async () => {
     const h = await workingClaude();
     h.rest(); h.poll();

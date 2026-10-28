@@ -322,7 +322,7 @@ function addStart(parent: Parent, start: Start): void {
 /**
  * A slash command's echo, its caveat and its output, which Claude Code writes as user entries: a
  * command such as `/model` runs no turn. One that does (a skill, `/compact`) writes the turn's own
- * entries next. So does a turn after Claude Code's own (`isMeta`) user entries.
+ * entries next. Other `isMeta` entries (a task notification) can begin a turn, and do.
  */
 const COMMAND_ECHO_RE = /"content":"<(?:command-name|command-message|command-args|local-command-(?:stdout|stderr|caveat))>/;
 
@@ -345,7 +345,7 @@ function scanParentLine(parent: Parent, line: string, end: number): void {
         if (parent.restAt !== null) parent.turnOpen = false;
       }
     } catch { /* a line caught half written is read again */ }
-  } else if (/"type":"(?:user|assistant|api-request)"/.test(line) && !line.includes('"isSidechain":true') && !line.includes('"type":"progress"') && !(line.includes('"type":"user"') && (COMMAND_ECHO_RE.test(line) || line.includes('"isMeta":true')))) {
+  } else if (/"type":"(?:user|assistant|api-request)"/.test(line) && !line.includes('"isSidechain":true') && !line.includes('"type":"progress"') && !(line.includes('"type":"user"') && COMMAND_ECHO_RE.test(line))) {
     parent.restAt = null;
     openTurn(parent, end, stamp(line.match(/"timestamp":"([^"]+)"/)?.[1]));
   } else if (line.includes('"queued_command"') && !line.includes('"isSidechain":true')) {
