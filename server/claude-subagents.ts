@@ -263,7 +263,7 @@ interface Parent {
   /** whether the latest turn goes on: no rest came after it yet */
   turnOpen: boolean;
   /** what a slash command's echo found, until the next entry says whether it began a turn (scanParentLine) */
-  echo: { restAt: number | null; promptAt: number | null; turnOpen: boolean; starts: Start[] } | null;
+  echo: { command: string | null; restAt: number | null; promptAt: number | null; turnOpen: boolean; starts: Start[] } | null;
 }
 interface Start { end: number; at: number | null; turn: boolean }
 
@@ -330,6 +330,10 @@ function addStart(parent: Parent, start: Start): void {
 const COMMAND_ECHO_RE = /"content":"<(?:command-name|command-message|command-args)>/;
 /** A slash command as typed (\`/compact\`), which Claude Code writes before running it, with no \`origin\`. */
 const SLASH_RE = /"content":"\/[^"\s]/;
+
+/** The command a slash command's echo, or its line as typed, names. */
+const commandOf = (line: string): string | null =>
+  line.match(/<command-name>\/?([^<\s]+)<\/command-name>/)?.[1] ?? line.match(/"content":"\/([^"\s]+)/)?.[1] ?? null;
 const LOCAL_OUTPUT_RE = /"content":"<local-command-(?:stdout|stderr)>/;
 /** Bash mode (\`!ls\`): its command and output, which Claude Code writes as user entries and runs no turn for. */
 const BASH_RE = /"content":"<bash-(?:input|stdout|stderr)>/;
@@ -364,6 +368,8 @@ function scanParentLine(parent: Parent, line: string, end: number): void {
   // Claude closes the session's turn with a `turn_duration` entry; a next turn writes its request, prompt or answer first.
   // A `progress` entry carries a subagent's message inside it: the subagent's, not the session's
   if (local) {
+    // a bash-mode line the chat sent is taken in here, whether or not a turn follows it
+    if (line.includes('"content":"<bash-input>')) addStart(parent, { end, at: stamp(line.match(/"timestamp":"([^"]+)"/)?.[1]), turn: false });
     const echo = parent.echo;
     if (echo !== null && LOCAL_OUTPUT_RE.test(line)) {
       parent.restAt = echo.restAt;
@@ -384,15 +390,22 @@ function scanParentLine(parent: Parent, line: string, end: number): void {
   } else if (user && line.includes('"isCompactSummary":true')) {
     // a compaction's summary is Claude Code's own: \`/compact\` is told by its command, an idle compaction runs no turn
   } else if (/"type":"(?:user|assistant|api-request)"/.test(line) && !line.includes('"isSidechain":true') && !line.includes('"type":"progress"')) {
-    // a command's echo, and its line as typed before it (\`/compact\`): its output takes back what the first began
+    // a command's echo, and its line as typed before it (\`/compact\`): its output takes back what the
+    // first of them began. Only the same command's: another's echo between them begins a turn of its own
     const echo = user && (COMMAND_ECHO_RE.test(line) || (own && SLASH_RE.test(line)));
-    parent.echo = !echo ? null : parent.echo ?? { restAt: parent.restAt, promptAt: parent.promptAt, turnOpen: parent.turnOpen, starts: parent.starts.map((start) => ({ ...start })) };
+    const command = echo ? commandOf(line) : null;
+    parent.echo = !echo ? null : parent.echo !== null && parent.echo.command === command ? parent.echo
+      : { command, restAt: parent.restAt, promptAt: parent.promptAt, turnOpen: parent.turnOpen, starts: parent.starts.map((start) => ({ ...start })) };
     parent.restAt = null;
     openTurn(parent, end, stamp(line.match(/"timestamp":"([^"]+)"/)?.[1]));
   } else if (line.includes('"queued_command"') && !line.includes('"isSidechain":true')) {
     try {
       const entry = row(JSON.parse(line));
-      if (entry?.["type"] === "attachment" && row(entry["attachment"])?.["type"] === "queued_command") addStart(parent, { end, at: stamp(entry["timestamp"]), turn: false });
+      if (entry?.["type"] === "attachment" && row(entry["attachment"])?.["type"] === "queued_command") {
+        addStart(parent, { end, at: stamp(entry["timestamp"]), turn: false });
+        // a message taken in while a command runs: no command's output takes back the work it brings
+        parent.echo = null;
+      }
     } catch { /* a line caught half written is read again */ }
   }
   const mentioned = line.includes("<task-notification>");

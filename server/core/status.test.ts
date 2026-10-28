@@ -404,6 +404,53 @@ describe("Claude turn starts the transcript does not show yet (#2072)", () => {
     expect(h.pending.current(h.pane.pane_id)).toBe("done");
   });
 
+  it("keeps working when a message is taken in, or a skill runs, while /compact runs", async () => {
+    for (const between of ["queued", "skill"] as const) {
+      const h = await workingClaude();
+      h.rest(); h.poll();
+      const ts = (ms: number) => new Date(at + ms).toISOString();
+      appendFileSync(h.path, line({ type: "user", timestamp: ts(6000), message: { role: "user", content: "/compact" } })
+        + line({ type: "system", subtype: "compact_boundary", timestamp: ts(9000), content: "Conversation compacted" })
+        + line({ type: "user", isCompactSummary: true, timestamp: ts(9000), message: { role: "user", content: "This session is being continued from a previous conversation." } })
+        + (between === "queued"
+          ? line({ type: "attachment", timestamp: ts(9000), attachment: { type: "queued_command", commandMode: "prompt", prompt: "and then?" } })
+          : line({ type: "user", timestamp: ts(9000), message: { role: "user", content: "<command-message>review-pr</command-message>\n<command-name>/review-pr</command-name>" } }))
+        + line({ type: "user", isMeta: true, timestamp: ts(9001), message: { role: "user", content: "<local-command-caveat>Caveat</local-command-caveat>" } })
+        + line({ type: "user", timestamp: ts(9001), message: { role: "user", content: "<command-name>/compact</command-name>\n<command-message>compact</command-message>" } })
+        + line({ type: "user", timestamp: ts(9002), message: { role: "user", content: "<local-command-stdout>Compacted</local-command-stdout>" } }));
+      h.poll();
+      queue(h);
+      // the compaction's output takes back only what it began
+      expect(h.last().status).toBe("working");
+      expect(h.pending.next(h.pane.pane_id)).toBeNull();
+    }
+  });
+
+  it("closes the queue for a bash-mode line the chat sends until Claude takes it in", async () => {
+    for (const shape of ["model turn", "no turn"] as const) {
+      const h = await workingClaude();
+      h.rest(); h.poll();
+      noteSubmitted(h.pane.pane_id, "!ls", undefined, at + 5500);
+      queue(h);
+      expect(h.last().status).toBe("working");
+      expect(h.pending.next(h.pane.pane_id)).toBeNull();
+      const ts = (ms: number) => new Date(at + ms).toISOString();
+      const bash = line({ type: "user", timestamp: ts(6000), message: { role: "user", content: "<bash-input>ls</bash-input>" } })
+        + line({ type: "user", timestamp: ts(6001), message: { role: "user", content: "<bash-stdout>README.md</bash-stdout><bash-stderr></bash-stderr>" } });
+      // Claude Code 2.1.311 answers it in a model turn; versions before it may write the records alone
+      if (shape === "model turn") {
+        appendFileSync(h.path, line({ type: "api-request", timestamp: ts(6002) }) + bash);
+        h.poll();
+        expect(h.last().status).toBe("working");
+        appendFileSync(h.path, line({ type: "assistant", timestamp: ts(7000), message: { role: "assistant", stop_reason: "end_turn", content: [] } })
+          + line({ type: "system", subtype: "turn_duration", timestamp: ts(7001) }));
+      } else appendFileSync(h.path, bash);
+      h.poll();
+      expect(h.last().status).toBe("done");
+      expect(h.pending.next(h.pane.pane_id)).not.toBeNull();
+    }
+  });
+
   it("keeps the rest through a compaction Claude Code runs while idle", async () => {
     const h = await workingClaude();
     h.rest(); h.poll();
