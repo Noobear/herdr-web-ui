@@ -64,7 +64,7 @@ export const claude = { ...base, agent: "claude", agent_session: { agent: "claud
 
 let hubs = 0;
 /** The status hub with herdr, OpenCode's service and the Claude lookup stood in for; what a browser and web push are sent. */
-export function hub(path = transcript) {
+export function hub<Owner = unknown, Lease = unknown>(path = transcript, queued?: PendingInputs<Owner, Lease>, drain?: (paneId: string) => void) {
   let panes: unknown[] = [];
   let gate: Promise<void> | null = null;
   let reading: (() => void) | undefined;
@@ -81,11 +81,11 @@ export function hub(path = transcript) {
   );
   const frames: { type: string; agent_status?: string; background_tasks?: number; background_wait?: boolean }[] = [];
   const client = { data: connectionData({ deviceId: undefined, readOnly: false }), getBufferedAmount: () => 0, send: (encoded: string) => { frames.push(JSON.parse(encoded)); return 1; } } as unknown as Client;
-  const pending = new PendingInputs(() => {});
+  const pending = queued ?? new PendingInputs<Owner, Lease>(() => {});
   const status = createStatusHub({
     options: { stateDir: join(root, `state${++hubs}`), opencodeDb: store, machines: false },
     devices: { gated: false, has: () => true, onPaired: () => {} } as never, preferences: { get: () => ({ muted_panes: [] }), subscribe: () => () => {} } as never,
-    clients: new Set([client]), present: new Set(), pending, drainPending() {}, holdPendingPane() {},
+    clients: new Set([client]), present: new Set(), pending, drainPending: drain ?? (() => {}), holdPendingPane() {},
     usage: { invalidate() {} } as never, usageLogin: { ended: () => false } as never,
   });
   const alerts: string[] = [];
@@ -94,7 +94,7 @@ export function hub(path = transcript) {
   stubs.push(spyOn(status.push, "onStatus").mockImplementation(async (_paneId: string, alert: string) => { alerts.push(alert); }));
   stubs.push({ mockRestore: () => { status.collector.stop(); status.omo.stop(); status.gjc.stop(); status.claudeAgents.stop(); status.opencodeAgents.stop(); status.plans.stop(); clearInterval(status.waitTimer); } });
   return {
-    alerts, pending,
+    alerts, pending, status,
     /** herdr's panes from now on, as a snapshot or a pane lookup reads them */
     herdrSays: (pane: unknown) => { panes = [pane]; },
     /** a snapshot, both trackers reading it (Claude's lookup awaited) */
@@ -127,7 +127,7 @@ export const line = (value: unknown) => `${JSON.stringify(value)}\n`;
 const ts = (ms: number) => new Date(at + ms).toISOString();
 let fixtures = 0;
 /** Each turn regression has its own transcript, parent session and streaming child. */
-export async function workingClaude() {
+export async function workingClaude<Owner = unknown, Lease = unknown>(queued?: PendingInputs<Owner, Lease>, drain?: (paneId: string) => void) {
   const id = `33333333-3333-4333-8333-${String(++fixtures).padStart(12, "0")}`;
   const path = join(root, `${id}.jsonl`);
   const dir = join(root, id, "subagents");
@@ -137,7 +137,7 @@ export async function workingClaude() {
   writeFileSync(join(dir, "agent-b1.meta.json"), JSON.stringify({ agentType: "reviewer", toolUseId: "toolu_b1", requestShape: "background" }));
   writeFileSync(child, line({ isSidechain: true, sessionId: id, agentId: "b1", type: "user", timestamp: ts(0), message: { role: "user", content: "review" } }));
   const pane = { ...claude, agent_session: { ...claude.agent_session, value: id } };
-  const h = hub(path);
+  const h = hub(path, queued, drain);
   h.herdrSays(pane);
   handlers.onBaseline([pane]);
   await h.snapshot();

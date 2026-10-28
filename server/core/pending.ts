@@ -882,7 +882,9 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
             const mark = pending.mark(message.pane_id);
             const context = await pendingContext(client, message.pane_id, lease!);
             if (Date.now() - arrivedAt > (options.submitDeadlineMs ?? SUBMIT_DEADLINE_MS)) throw new HerdrError("submit_timeout", "This pending message waited too long; nothing was typed");
-            if (!context.working) {
+            // a pane shown at rest whose queue a busy signal still holds is not ready for a queued message
+            const held = queueHeld(message.pane_id);
+            if (!context.working && !held) {
               // the agent left while the message was on its way: a chat follow-up is not typed into what is there now
               if (context.identity.agent === null) throw new HerdrError("agent_not_ready", "No agent is in front of this pane now; nothing was typed");
               // A request that raced the turn's finish still needs cancellable
@@ -891,7 +893,7 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
               // A held message is never typed by arriving after the turn: it waits for Send now.
               if (message.delivery === "queue" && !pending.waiting(message.pane_id)) return dispatchPendingText(client, message.pane_id, text, lease!, context.identity, false, arrivedAt, undefined, false, message.id);
             }
-            pending.observe(message.pane_id, context.pane.agent_status, mark);
+            pending.observe(message.pane_id, held && !context.working ? "working" : context.pane.agent_status, mark);
             // hold: kept for the owner's Send now, never sent by the turn's end
             const item = pending.enqueue(client, message.pane_id, message.id, text, lease!, context.identity, message.delivery === "hold");
             return { ok: true, pending: item.message };

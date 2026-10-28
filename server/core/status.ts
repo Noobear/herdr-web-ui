@@ -141,7 +141,13 @@ export function createStatusHub<Owner, Lease>({ options, devices, preferences, c
       const agent = agentNow.get(paneId) ?? null;
       if (owns(paneId, "claude")) newLifetime(paneId, agent === "claude" ? null : agent);
     },
-    onChange: (paneId, running, turnRunning, promptAt) => { if (agentNow.get(paneId) === "claude" && owns(paneId, "claude")) claudeAgentsChanged(paneId, running, turnRunning, promptAt, false, "claude"); },
+    onChange: (paneId, running, turnRunning, promptAt) => {
+      if (agentNow.get(paneId) !== "claude" || !owns(paneId, "claude")) return;
+      claudeAgentsChanged(paneId, running, turnRunning, promptAt, false, "claude");
+      // the queue's hold came or went with the pane's status unchanged: its queued input is told now
+      const status = completions.current(paneId);
+      if (status !== undefined && paneId !== settling && pending.current(paneId) !== queueStatus(paneId, status)) { pending.status(paneId, queueStatus(paneId, status)); drainPending(paneId); }
+    },
   });
   /** herdr's last word on each Claude pane, before restingClaude took it for a rest */
   const heard = new Map<string, AgentStatus>();

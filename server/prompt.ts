@@ -195,7 +195,8 @@ const submittedListeners = new Set<SubmittedListener>();
 
 /**
  * Each successful chat send, as it returns. `prompt`: it is a prompt, which begins a turn; a
- * slash command may run with none, and Claude Code may hold a message with invisible characters.
+ * slash command or a bash-mode line may run with none, and Claude Code may hold a message with
+ * invisible characters.
  * `sentAt`: when the send's Enter was sent, where its sender knows.
  */
 export function onChatSubmitted(listener: SubmittedListener): () => void {
@@ -218,7 +219,8 @@ export function noteSubmitted(paneId: string, text: string, command?: PaneComman
   if (chatSent.size > 128) chatSent.delete(chatSent.keys().next().value!);
   if (INVISIBLE_CHAR_RE.test(text)) heldCandidates.set(paneId, { text, at: Date.now() });
   else heldCandidates.delete(paneId);
-  const prompt = !INVISIBLE_CHAR_RE.test(text) && !text.trimStart().startsWith("/");
+  // a slash command or a bash-mode line (\`!ls\`) may run no turn; what they do start, the transcript tells
+  const prompt = !INVISIBLE_CHAR_RE.test(text) && !/^[/!]/.test(text.trimStart());
   // the message is sent: what a listener makes of it must not turn the send into a failure
   for (const listener of submittedListeners) {
     try { listener(paneId, prompt, sentAt); } catch (error) { console.error(`chat send on ${paneId}: a listener failed: ${error instanceof Error ? error.message : String(error)}`); }

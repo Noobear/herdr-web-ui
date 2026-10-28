@@ -1,7 +1,10 @@
-import { describe, expect, it, setSystemTime } from "bun:test";
+import { afterEach, describe, expect, it, setSystemTime, spyOn } from "bun:test";
 import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import * as herdr from "../herdr/client.ts";
 import { noteSubmitted } from "../prompt.ts";
+import { connectionData, type Client } from "./connections.ts";
+import { createPendingDelivery } from "./pending.ts";
 import { at, claude, collectorSnapshot, handlers, hub, line, opencode, root, workingClaude } from "./status.fake.ts";
 
 describe("the status hub's OpenCode subagents", () => {
@@ -371,6 +374,47 @@ describe("Claude turn starts the transcript does not show yet (#2072)", () => {
     expect(h.pending.next(h.pane.pane_id)).toBeNull();
   });
 
+  it("keeps the rest through a bash-mode command, which runs no turn", async () => {
+    const h = await workingClaude();
+    h.rest(); h.poll();
+    // the entries Claude Code writes for \`!ls\`
+    const ts = (ms: number) => new Date(at + ms).toISOString();
+    appendFileSync(h.path, line({ type: "user", timestamp: ts(6000), message: { role: "user", content: "<bash-input>ls</bash-input>" } })
+      + line({ type: "user", timestamp: ts(6001), message: { role: "user", content: "<bash-stdout>README.md</bash-stdout><bash-stderr></bash-stderr>" } }));
+    h.poll();
+    expect(h.last()).toEqual({ status: "done", tasks: 1, bg: true });
+    expect(h.pending.current(h.pane.pane_id)).toBe("done");
+  });
+
+  it("shows /compact at work while it runs, and at rest again once its output is written", async () => {
+    const h = await workingClaude();
+    h.rest(); h.poll();
+    // the entries Claude Code 2.1.29x-2.1.30x writes for /compact typed at rest
+    const ts = (ms: number) => new Date(at + ms).toISOString();
+    appendFileSync(h.path, line({ type: "user", timestamp: ts(6000), message: { role: "user", content: "/compact" } }));
+    h.poll();
+    expect(h.last().status).toBe("working");
+    appendFileSync(h.path, line({ type: "system", subtype: "compact_boundary", timestamp: ts(9000), content: "Conversation compacted" })
+      + line({ type: "user", isCompactSummary: true, isVisibleInTranscriptOnly: true, timestamp: ts(9000), message: { role: "user", content: "This session is being continued from a previous conversation." } })
+      + line({ type: "user", isMeta: true, timestamp: ts(9001), message: { role: "user", content: "<local-command-caveat>Caveat</local-command-caveat>" } })
+      + line({ type: "user", timestamp: ts(9001), message: { role: "user", content: "<command-name>/compact</command-name>\n<command-message>compact</command-message>\n<command-args></command-args>" } })
+      + line({ type: "user", timestamp: ts(9002), message: { role: "user", content: "<local-command-stdout>Compacted</local-command-stdout>" } }));
+    h.poll();
+    expect(h.last()).toEqual({ status: "done", tasks: 1, bg: true });
+    expect(h.pending.current(h.pane.pane_id)).toBe("done");
+  });
+
+  it("keeps the rest through a compaction Claude Code runs while idle", async () => {
+    const h = await workingClaude();
+    h.rest(); h.poll();
+    const ts = (ms: number) => new Date(at + ms).toISOString();
+    appendFileSync(h.path, line({ type: "system", subtype: "compact_boundary", timestamp: ts(6000), content: "Conversation compacted" })
+      + line({ type: "user", isCompactSummary: true, isVisibleInTranscriptOnly: true, timestamp: ts(6000), message: { role: "user", content: "This session is being continued from a previous conversation." } })
+      + line({ type: "system", subtype: "informational", timestamp: ts(6001), content: "Compacted while idle" }));
+    h.poll();
+    expect(h.last()).toEqual({ status: "done", tasks: 1, bg: true });
+  });
+
   it("keeps the rest through a slash command, which runs no turn", async () => {
     const h = await workingClaude();
     h.rest(); h.poll();
@@ -461,5 +505,68 @@ describe("the status hub's Claude turn at rest under its background subagent", (
     appendFileSync(path, line({ type: "user", origin: { kind: "human" }, timestamp: ts(5000), permissionMode: "default", message: { role: "user", content: "next" } }));
     h.poll();
     expect(h.last().status).toBe("working");
+  });
+});
+
+describe("queued input while a busy signal holds a Claude pane's queue (#2072)", () => {
+  const READY = { attached: true, origin: true, sameAttachment: true, samePty: true, sameClaim: true, claimed: true, member: true, ready: true, held: false, currentHeld: false, mirror: false, cols: 80 };
+  const spies: { mockRestore(): void }[] = [];
+  afterEach(() => { for (const spy of spies.splice(0)) spy.mockRestore(); setSystemTime(); });
+
+  /** A pane shown at rest again after a herdr working signal whose turn was never written: its queue is held. */
+  async function heldPane(queued = false) {
+    const writes: string[] = [];
+    const client = { data: connectionData({ readOnly: false, deviceId: undefined }), getBufferedAmount: () => 0, send: () => 1 } as unknown as Client;
+    let lane: Promise<unknown> = Promise.resolve();
+    const serialize = <T>(_paneId: string, task: () => T | Promise<T>): Promise<T> => { const next = lane.catch(() => undefined).then(task); lane = next; return next; };
+    let h!: Awaited<ReturnType<typeof workingClaude<Client, unknown>>>;
+    const delivery = createPendingDelivery({
+      options: { submitDelayMs: 0 }, clients: new Set([client]), attachments: new Map(), serialize, lastTyped: new Map(),
+      sight: () => ({ origin: null, pty: null, claim: null, facts: () => READY, write: (data: string) => { writes.push(data); } }) as never,
+      submitText: (async () => { throw new Error("no immediate send in this test"); }) as never, authorizeSocket: () => {},
+      clientSnapshot: () => h.status.clientSnapshot(), omo: { sessionOf: () => null }, queueHeld: (paneId) => h.status.queueHeld(paneId),
+      SUBMIT_DEADLINE_MS: 45_000, SUBMIT_DELAY_MS: 0, TYPED_SETTLE_MS: 0,
+    });
+    h = await workingClaude(delivery.pending as never, delivery.drainPending);
+    spies.push(
+      spyOn(herdr, "paneRead").mockResolvedValue({ text: "" } as never),
+      spyOn(herdr, "paneProcessInfo").mockResolvedValue({ foreground_processes: [], shell_pid: null } as never),
+      spyOn(herdr, "paneSendText").mockImplementation(async (_paneId, text) => { writes.push(`paste ${text}`); }),
+      spyOn(herdr, "paneSendKeys").mockImplementation(async (_paneId, keys) => { writes.push(`keys ${keys.join(",")}`); }),
+    );
+    h.rest(); h.poll();
+    handlers.onStatus(h.pane.pane_id, "working", "claude");
+    if (queued) await delivery.pendingFrames.submit(client, { type: "submit", id: 10, pane_id: h.pane.pane_id, text: "first", payload: "first", delivery: "queue" } as never);
+    setSystemTime(Date.now() + 6000);
+    h.poll();
+    expect((await h.snapshot()).panes[0]?.agent_status).toBe("done");
+    return { h, delivery, writes, client, flush: async () => { await lane; await lane; } };
+  }
+
+  it("keeps a queued message sent meanwhile waiting, and types nothing", async () => {
+    const { h, delivery, writes, client } = await heldPane();
+    await delivery.pendingFrames.submit(client, { type: "submit", id: 11, pane_id: h.pane.pane_id, text: "wait", payload: "wait", delivery: "queue" } as never);
+    expect(writes).toEqual([]);
+    expect(delivery.pending.list(client, h.pane.pane_id).map((message) => message.state)).toEqual(["queued"]);
+  });
+
+  it("offers no queued message when a held one is added meanwhile", async () => {
+    const { h, delivery, client, flush } = await heldPane(true);
+    // what the hold's own status read hands the queue, at the moment it hands it
+    const observe = delivery.pending.observe.bind(delivery.pending);
+    let offered = false;
+    spies.push(spyOn(delivery.pending, "observe").mockImplementation((paneId, status, mark) => { observe(paneId, status, mark); offered ||= delivery.pending.next(h.pane.pane_id) !== null; }));
+    await delivery.pendingFrames.submit(client, { type: "submit", id: 12, pane_id: h.pane.pane_id, text: "held", payload: "held", delivery: "hold" } as never);
+    await flush();
+    expect(offered).toBe(false);
+    expect(delivery.pending.next(h.pane.pane_id)).toBeNull();
+  });
+
+  it("refuses the automatic send of a queued message though the pane is shown at rest", async () => {
+    const { h, delivery, writes, client, flush } = await heldPane(true);
+    delivery.pending.status(h.pane.pane_id, "done"); delivery.drainPending(h.pane.pane_id);
+    await flush();
+    expect(writes).toEqual([]);
+    expect(delivery.pending.list(client, h.pane.pane_id)[0]?.state).toBe("queued");
   });
 });

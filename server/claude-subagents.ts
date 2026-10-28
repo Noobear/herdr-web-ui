@@ -328,7 +328,11 @@ function addStart(parent: Parent, start: Start): void {
  * its caveat before it: that output takes back what the echo began.
  */
 const COMMAND_ECHO_RE = /"content":"<(?:command-name|command-message|command-args)>/;
+/** A slash command as typed (\`/compact\`), which Claude Code writes before running it, with no \`origin\`. */
+const SLASH_RE = /"content":"\/[^"\s]/;
 const LOCAL_OUTPUT_RE = /"content":"<local-command-(?:stdout|stderr)>/;
+/** Bash mode (\`!ls\`): its command and output, which Claude Code writes as user entries and runs no turn for. */
+const BASH_RE = /"content":"<bash-(?:input|stdout|stderr)>/;
 const LOCAL_CAVEAT_RE = /"content":"<local-command-caveat>/;
 
 /**
@@ -356,7 +360,7 @@ function scanParentLine(parent: Parent, line: string, end: number): void {
   // Claude writes a local command's caveat and output with neither `origin` nor a permission mode, as a
   // person's prompt never is: a prompt that quotes these tags is the person's, and begins a turn
   const own = !line.includes('"origin":') && !line.includes('"permissionMode":');
-  const local = !line.includes('"isSidechain":true') && ((user && own && (LOCAL_OUTPUT_RE.test(line) || (LOCAL_CAVEAT_RE.test(line) && line.includes('"isMeta":true')))) || line.includes('"subtype":"local_command"'));
+  const local = !line.includes('"isSidechain":true') && ((user && own && (LOCAL_OUTPUT_RE.test(line) || BASH_RE.test(line) || (LOCAL_CAVEAT_RE.test(line) && line.includes('"isMeta":true')))) || line.includes('"subtype":"local_command"'));
   // Claude closes the session's turn with a `turn_duration` entry; a next turn writes its request, prompt or answer first.
   // A `progress` entry carries a subagent's message inside it: the subagent's, not the session's
   if (local) {
@@ -377,8 +381,12 @@ function scanParentLine(parent: Parent, line: string, end: number): void {
         if (parent.restAt !== null) parent.turnOpen = false;
       }
     } catch { /* a line caught half written is read again */ }
+  } else if (user && line.includes('"isCompactSummary":true')) {
+    // a compaction's summary is Claude Code's own: \`/compact\` is told by its command, an idle compaction runs no turn
   } else if (/"type":"(?:user|assistant|api-request)"/.test(line) && !line.includes('"isSidechain":true') && !line.includes('"type":"progress"')) {
-    parent.echo = user && COMMAND_ECHO_RE.test(line) ? { restAt: parent.restAt, promptAt: parent.promptAt, turnOpen: parent.turnOpen, starts: [...parent.starts] } : null;
+    // a command's echo, and its line as typed before it (\`/compact\`): its output takes back what the first began
+    const echo = user && (COMMAND_ECHO_RE.test(line) || (own && SLASH_RE.test(line)));
+    parent.echo = !echo ? null : parent.echo ?? { restAt: parent.restAt, promptAt: parent.promptAt, turnOpen: parent.turnOpen, starts: parent.starts.map((start) => ({ ...start })) };
     parent.restAt = null;
     openTurn(parent, end, stamp(line.match(/"timestamp":"([^"]+)"/)?.[1]));
   } else if (line.includes('"queued_command"') && !line.includes('"isSidechain":true')) {
@@ -1180,7 +1188,7 @@ interface Tracked {
   key: string; path: string | null; startedAt: number | null; pid: number | null;
   /** when its transcript, and its process, were last looked for */
   at: number; pidAt: number;
-  live: boolean; running: number; turnRunning: number; promptAt: number | null; resting: boolean; sig: string | null;
+  live: boolean; running: number; turnRunning: number; promptAt: number | null; resting: boolean; holding?: boolean; sig: string | null;
   reset?: boolean;
   /** the turns of the transcript read, and the busy signals matched to them */
   turns?: Turns;
@@ -1275,16 +1283,16 @@ export class ClaudeSubagentStatus {
     return this.panes.get(paneId)?.running ?? 0;
   }
 
-  /**
-   * The session's own turn ended while subagents or commands still run: Claude keeps its busy
-   * title up while a background subagent works, and herdr reads that as `working` (#2069).
-   */
   /** Signals that waited for their turn in vain hold the pane's queue: nothing proves they began no turn. */
   holdsQueue(paneId: string): boolean {
     const turns = this.panes.get(paneId)?.turns;
     return turns !== undefined && turns.herdr.held.length + turns.chat.held.length > 0;
   }
 
+  /**
+   * The session's own turn ended while subagents or commands still run: Claude keeps its busy
+   * title up while a background subagent works, and herdr reads that as `working` (#2069).
+   */
   restsOn(paneId: string): boolean {
     const tracked = this.panes.get(paneId);
     return tracked !== undefined && tracked.resting && tracked.running > 0;
@@ -1309,20 +1317,27 @@ export class ClaudeSubagentStatus {
     // the signal's own read, ahead of the poll that would take a turn it finds at rest for history
     const parent = turns && size?.id === turns.id ? scanParent(turns.path) : null;
     if (turns && parent?.id === turns.id) match(turns, parent, signal, size!.size);
-    else this.deferred.set(paneId, [...this.deferred.get(paneId) ?? [], signal]);
+    // a pane whose transcript is not found yet keeps its latest signals, not every one
+    else this.deferred.set(paneId, [...(this.deferred.get(paneId) ?? []).slice(-15), signal]);
     if (!tracked) return;
     tracked.sig = null;
     this.poll(paneId);
   }
 
   /**
-   * herdr says the pane does no work: the signals holding its queue began nothing that still runs.
+   * herdr says the pane does no work: its own signals holding the queue began nothing that still runs.
    * Said in an event (`event`), a turn it tells of next begins in what is written after now.
    */
   quiet(paneId: string, event: boolean): void {
     const tracked = this.panes.get(paneId);
     if (!tracked) return;
-    if (tracked.turns) for (const claim of [tracked.turns.herdr, tracked.turns.chat]) claim.held = [];
+    // a chat send's is the transcript's to release: Claude may write its prompt late (a slow
+    // UserPromptSubmit hook) while its title shows no work
+    if (tracked.turns && tracked.turns.herdr.held.length > 0) {
+      tracked.turns.herdr.held = [];
+      // the next poll tells of the queue let go, though no file changed
+      tracked.sig = null;
+    }
     if (!event) return;
     const stat = tracked.path !== null && tracked.live ? plain(tracked.path) : null;
     if (stat !== null && tracked.path !== null) tracked.quiet = { path: tracked.path, id: stat.id, size: stat.size };
@@ -1464,7 +1479,10 @@ export class ClaudeSubagentStatus {
         tracked.sig = !waiting && state.settled && before.sig === after.sig && scanAt - before.latestMs >= 1000
           ? `${after.sig}:${tracked.startedAt}` : null;
       }
-      if (!tracked.reset && running === tracked.running && turnRunning === tracked.turnRunning && promptAt === tracked.promptAt && resting === tracked.resting) continue;
+      // a held queue let go of (a rest written past it) is told too, though the pane rested all along
+      const holding = this.holdsQueue(paneId);
+      if (!tracked.reset && running === tracked.running && turnRunning === tracked.turnRunning && promptAt === tracked.promptAt && resting === tracked.resting && holding === (tracked.holding ?? false)) continue;
+      tracked.holding = holding;
       tracked.reset = false;
       tracked.running = running;
       tracked.turnRunning = turnRunning;
