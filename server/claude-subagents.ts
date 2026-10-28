@@ -329,11 +329,12 @@ function addStart(parent: Parent, start: Start): void {
  */
 const COMMAND_ECHO_RE = /"content":"<(?:command-name|command-message|command-args)>/;
 /** A slash command as typed (\`/compact\`), which Claude Code writes before running it, with no \`origin\`. */
-const SLASH_RE = /"content":"\/[^"\s]/;
+const SLASH_RE = /"role":"user","content":"\/[^"\s]/;
 
 /** The command a slash command's echo, or its line as typed, names. */
 const commandOf = (line: string): string | null =>
-  line.match(/<command-name>\/?([^<\s]+)<\/command-name>/)?.[1] ?? line.match(/"content":"\/([^"\s]+)/)?.[1] ?? null;
+  line.match(/"role":"user","content":"\/([^"\s\\]+)/)?.[1]
+  ?? line.match(/"content":"(?:<command-message>[^<]*<\/command-message>(?:\\n|\s)*)?<command-name>\/?([^<\s]+)<\/command-name>/)?.[1] ?? null;
 const LOCAL_OUTPUT_RE = /"content":"<local-command-(?:stdout|stderr)>/;
 /** Bash mode (\`!ls\`): its command and output, which Claude Code writes as user entries and runs no turn for. */
 const BASH_RE = /"content":"<bash-(?:input|stdout|stderr)>/;
@@ -392,7 +393,8 @@ function scanParentLine(parent: Parent, line: string, end: number): void {
   } else if (/"type":"(?:user|assistant|api-request)"/.test(line) && !line.includes('"isSidechain":true') && !line.includes('"type":"progress"')) {
     // a command's echo, and its line as typed before it (\`/compact\`): its output takes back what the
     // first of them began. Only the same command's: another's echo between them begins a turn of its own
-    const echo = user && (COMMAND_ECHO_RE.test(line) || (own && SLASH_RE.test(line)));
+    // Claude Code writes both with neither \`origin\` nor a permission mode: a prompt quoting them is the person's
+    const echo = user && own && (COMMAND_ECHO_RE.test(line) || SLASH_RE.test(line));
     const command = echo ? commandOf(line) : null;
     parent.echo = !echo ? null : parent.echo !== null && parent.echo.command === command ? parent.echo
       : { command, restAt: parent.restAt, promptAt: parent.promptAt, turnOpen: parent.turnOpen, starts: parent.starts.map((start) => ({ ...start })) };
@@ -1569,8 +1571,10 @@ function settle(turns: Turns, parent: Parent, now: number | null): void {
       claim.held.push(...claim.barriers.filter((barrier) => now - barrier.at >= BUSY_HOLD_MS));
       claim.barriers = claim.barriers.filter((barrier) => now - barrier.at < BUSY_HOLD_MS);
     }
-    // a rest written past a held signal ends whatever turn it began
-    claim.held = claim.held.filter((barrier) => parent.restAt === null || parent.restAt <= barrier.size);
+    // a rest written past a held signal ends whatever turn it began; for a chat send, so does its
+    // own entry written late (a bash-mode line), past which the turn, if any, shows open
+    claim.held = claim.held.filter((barrier) => (parent.restAt === null || parent.restAt <= barrier.size)
+      && !(source === "chat" && parent.starts.some((start) => start.end > barrier.size)));
   }
 }
 

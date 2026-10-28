@@ -1393,7 +1393,7 @@ describe("claudeSubagents, background commands", () => {
     s.parent({ type: "system", subtype: "turn_duration", isSidechain: false, timestamp: at(3) });
     // a local command: caveat, echo, output
     s.parent({ type: "user", isMeta: true, timestamp: at(4), message: { role: "user", content: "<local-command-caveat>Caveat</local-command-caveat>" } });
-    s.parent({ type: "user", origin: { kind: "human" }, timestamp: at(4), message: { role: "user", content: "<command-name>/model</command-name>\n<command-message>model</command-message>\n<command-args>sonnet</command-args>" } });
+    s.parent({ type: "user", timestamp: at(4), message: { role: "user", content: "<command-name>/model</command-name>\n<command-message>model</command-message>\n<command-args>sonnet</command-args>" } });
     s.parent({ type: "user", timestamp: at(4), message: { role: "user", content: "<local-command-stdout>Set model to sonnet</local-command-stdout>" } });
     expect(claudeSubagentState(s.path, true, NOW)).toMatchObject({ resting: true, promptAt: Date.parse(at(1)) });
     // a skill: its echo, then the skill's own text

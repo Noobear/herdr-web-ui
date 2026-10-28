@@ -426,6 +426,52 @@ describe("Claude turn starts the transcript does not show yet (#2072)", () => {
     }
   });
 
+  it("keeps a person's prompt sent while /compact runs, though it quotes /compact's echo", async () => {
+    const h = await workingClaude();
+    h.rest(); h.poll();
+    const ts = (ms: number) => new Date(at + ms).toISOString();
+    appendFileSync(h.path, line({ type: "user", timestamp: ts(6000), message: { role: "user", content: "/compact" } })
+      + line({ type: "user", origin: { kind: "human" }, permissionMode: "default", timestamp: ts(7000), message: { role: "user", content: "<command-name>/compact</command-name> what does this tag do?" } })
+      + line({ type: "user", isMeta: true, timestamp: ts(9001), message: { role: "user", content: "<local-command-caveat>Caveat</local-command-caveat>" } })
+      + line({ type: "user", timestamp: ts(9001), message: { role: "user", content: "<command-name>/compact</command-name>" } })
+      + line({ type: "user", timestamp: ts(9002), message: { role: "user", content: "<local-command-stdout>Compacted</local-command-stdout>" } }));
+    h.poll();
+    queue(h);
+    expect(h.last().status).toBe("working");
+    expect(h.pending.next(h.pane.pane_id)).toBeNull();
+  });
+
+  it("returns /compact with arguments to rest once its output is written", async () => {
+    const h = await workingClaude();
+    h.rest(); h.poll();
+    const ts = (ms: number) => new Date(at + ms).toISOString();
+    appendFileSync(h.path, line({ type: "user", timestamp: ts(6000), message: { role: "user", content: "/compact focus on the <command-name>/model</command-name> parser\nand tests" } })
+      + line({ type: "user", isMeta: true, timestamp: ts(9001), message: { role: "user", content: "<local-command-caveat>Caveat</local-command-caveat>" } })
+      + line({ type: "user", timestamp: ts(9001), message: { role: "user", content: "<command-name>/compact</command-name>\n<command-args>focus on the parser</command-args>" } })
+      + line({ type: "user", timestamp: ts(9002), message: { role: "user", content: "<local-command-stdout>Compacted</local-command-stdout>" } }));
+    h.poll();
+    expect(h.last()).toEqual({ status: "done", tasks: 1, bg: true });
+  });
+
+  it("lets go of a bash-mode line the chat sent once its records are written, however late", async () => {
+    const h = await workingClaude();
+    h.rest(); h.poll();
+    noteSubmitted(h.pane.pane_id, "!sleep 10", undefined, at + 5500);
+    queue(h);
+    const ts = (ms: number) => new Date(at + ms).toISOString();
+    setSystemTime(Date.now() + 6000);
+    try {
+      h.poll();
+      expect(h.pending.next(h.pane.pane_id)).toBeNull();
+      // a version that writes the records alone, after the command ends
+      appendFileSync(h.path, line({ type: "user", timestamp: ts(16000), message: { role: "user", content: "<bash-input>sleep 10</bash-input>" } })
+        + line({ type: "user", timestamp: ts(16001), message: { role: "user", content: "<bash-stdout></bash-stdout><bash-stderr></bash-stderr>" } }));
+      h.poll();
+      expect(h.last().status).toBe("done");
+      expect(h.pending.next(h.pane.pane_id)).not.toBeNull();
+    } finally { setSystemTime(); }
+  });
+
   it("closes the queue for a bash-mode line the chat sends until Claude takes it in", async () => {
     for (const shape of ["model turn", "no turn"] as const) {
       const h = await workingClaude();
