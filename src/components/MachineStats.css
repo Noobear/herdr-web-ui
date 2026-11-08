@@ -8,11 +8,8 @@
 
 .machine-stats-summary {
   display: flex;
-  /* the bars share one line even when a narrow sidebar puts a percent under its label, and that line sits
-     in the middle of the row (a wrapping flex line is placed by align-content; the meters never wrap) */
-  flex-wrap: wrap;
-  align-content: center;
-  align-items: flex-end;
+  /* one line of meters, the bars level, the line in the middle of the row */
+  align-items: center;
   gap: var(--space-2);
   width: 100%;
   min-height: var(--touch-target);
@@ -37,25 +34,25 @@
   .machine-stats-summary { min-height: var(--side-row); }
 }
 
-/* label and percent on one line, the percent under the label where they do not fit side by side */
+/* one line always: each meter is an icon for its name with the percent beside it, over its bar, and takes the
+   room its figure needs, the rest shared out. An icon never has to be cut, so no meter drops a line */
 .stats-meter {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: space-between;
-  align-items: baseline;
-  flex: 1 1 0;
+  display: grid;
+  grid-template-columns: auto minmax(max-content, 1fr);
+  align-items: center;
+  flex: 1 1 auto;
   min-width: 0;
   column-gap: var(--space-1);
   row-gap: 3px;
 }
 
-/* a label wider than the narrowest sidebar's meter is cut, never drawn over its neighbour */
-.stats-meter-label { min-width: 0; max-width: 100%; overflow: hidden; color: var(--text-dim); text-overflow: ellipsis; white-space: nowrap; }
-.stats-meter-value { color: var(--text); font-variant-numeric: tabular-nums; text-align: right; }
+.stats-meter-label { display: flex; color: var(--text-dim); }
+.stats-meter-label > svg { width: 12px; height: 12px; }
+.stats-meter-value { color: var(--text); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .stats-meter.is-high .stats-meter-value { color: var(--status-blocked); }
 
 .stats-bar {
-  flex: 1 0 100%;
+  grid-column: 1 / -1;
   height: 3px;
   overflow: hidden;
   border-radius: var(--radius-pill);

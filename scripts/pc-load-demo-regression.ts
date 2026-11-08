@@ -157,9 +157,10 @@ try {
         } finally { await close(); }
       }
 
-      // the narrowest sidebar a desktop can drag to, and each theme at both widths: the three meters keep their
-      // label and percent whole, side by side without touching
-      for (const [width, theme, sidebarWidth] of [[1280, "dark", 240], [390, "dark", null], [390, "light", null], [1280, "dark", null], [1280, "light", null]] as const) {
+      // the narrowest sidebar a desktop can drag to, one a little wider (where one meter used to put its percent
+      // under its label while the others kept theirs beside it), and each theme at both widths: the three meters
+      // keep their label and percent whole, on one line, side by side without touching
+      for (const [width, theme, sidebarWidth] of [[1280, "dark", 240], [1280, "dark", 300], [390, "dark", null], [390, "light", null], [1280, "dark", null], [1280, "light", null]] as const) {
         const { page, errors, phone, close } = await open(browser, width, theme, sidebarWidth);
         try {
           await showSidebar(page, phone, true);
@@ -177,10 +178,13 @@ try {
               return !crossed && [label!, value!].every((part) => part.left >= box.left - 0.5 && part.right <= box.right + 0.5);
             });
             const apart = boxes.every((box, i) => i === 0 || boxes[i - 1]!.right <= box.left);
+            // every label beside its percent, never one meter wrapped while another is not; a label is never cut
+            const level = meters.every((meter) => { const [label, value] = words(meter); return label!.top < value!.bottom && value!.top < label!.bottom; });
+            const uncut = meters.every((meter) => { const label = meter.querySelector<HTMLElement>(".stats-meter-label")!; return label.scrollWidth <= label.clientWidth; });
             const sizes = meters.map((meter, i) => [boxes[i]!, ...words(meter)].map((r) => [r.left, r.right, r.top, r.bottom].map((n) => Math.round(n * 10) / 10).join(",")).join("/")).join(" ");
-            return { count: meters.length, whole, apart, sizes };
+            return { count: meters.length, whole, apart, level, uncut, sizes };
           });
-          assert.deepEqual({ ...fit, sizes: undefined }, { count: 3, whole: true, apart: true, sizes: undefined }, `${width}px ${theme}${sidebarWidth === null ? "" : ` ${sidebarWidth}px sidebar`}: the meters fit (box:label+percent ${fit.sizes})`);
+          assert.deepEqual({ ...fit, sizes: undefined }, { count: 3, whole: true, apart: true, level: true, uncut: true, sizes: undefined }, `${width}px ${theme}${sidebarWidth === null ? "" : ` ${sidebarWidth}px sidebar`}: the meters fit (box:label+percent ${fit.sizes})`);
           const name = `pc-load-${width}${sidebarWidth === null ? "" : `-sidebar${sidebarWidth}`}-${theme}`;
           if (evidence) { await still(page); await page.screenshot({ path: join(evidence, `${name}.png`) }); }
           await work.click();
@@ -189,7 +193,7 @@ try {
           assert.deepEqual(errors, []);
         } finally { await close(); }
       }
-      console.log("PASS the meters fit a 240px sidebar and a phone, light and dark");
+      console.log("PASS the meters fit a 240px and a 300px sidebar and a phone on one line, light and dark");
     } finally { await browser.close(); }
   } finally { await server.stop(true); }
 } finally {

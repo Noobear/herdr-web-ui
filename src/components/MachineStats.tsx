@@ -1,5 +1,5 @@
 import { useId, useState } from "react";
-import { ChevronDown, ChevronRight } from "lucide-react";
+import { ChevronDown, ChevronRight, Cpu, HardDrive, MemoryStick, type LucideIcon } from "lucide-react";
 import type { Machine } from "../../shared/machines.ts";
 import type { SystemDisk, SystemReport } from "../../shared/system.ts";
 import { useT, type Translate } from "../lib/i18n.ts";
@@ -13,10 +13,10 @@ import "./MachineStats.css";
 const high = (percent: number | null): string => percent !== null && Math.round(percent) >= SYSTEM_HIGH_PERCENT ? " is-high" : "";
 
 /** One figure with its bar. It is only drawn: the button around it carries the numbers for a screen reader. */
-function Meter({ label, percent }: { label: string; percent: number | null }) {
+function Meter({ label, icon: Icon, percent }: { label: string; icon: LucideIcon; percent: number | null }) {
   const value = percent === null ? 0 : Math.max(0, Math.min(100, percent));
   return <span className={`stats-meter${high(percent)}`}>
-    <span className="stats-meter-label">{label}</span>
+    <span className="stats-meter-label" title={label}><Icon aria-hidden="true" /></span>
     <span className="stats-meter-value">{formatPercentValue(percent)}</span>
     <span className="stats-bar" aria-hidden="true">
       {/* a sliver above 0 still shows as a bar, not a dot */}
@@ -76,9 +76,9 @@ export function MachineStats({ machine, active }: { machine: Machine; active: bo
   return <div className="machine-stats">
     <button type="button" className="machine-stats-summary" aria-expanded={open} aria-controls={id}
       aria-label={t(open ? "Hide system details for {name}" : "Show system details for {name}", { name: machine.name }) + ". " + spoken(t, report)} onClick={toggle}>
-      <Meter label={t("CPU")} percent={report.cpu_percent} />
-      {report.memory && <Meter label={t("Memory")} percent={report.memory.percent} />}
-      {disk && <Meter label={t("Disk")} percent={disk.percent} />}
+      <Meter label={t("CPU")} icon={Cpu} percent={report.cpu_percent} />
+      {report.memory && <Meter label={t("Memory")} icon={MemoryStick} percent={report.memory.percent} />}
+      {disk && <Meter label={t("Disk")} icon={HardDrive} percent={disk.percent} />}
       {open ? <ChevronDown aria-hidden="true" /> : <ChevronRight aria-hidden="true" />}
     </button>
     {open && <div id={id}><Details report={report} /></div>}
