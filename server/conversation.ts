@@ -1628,8 +1628,8 @@ type KnownProcesses = ProcessInfo | null | undefined;
 export async function paneRunsOmo(paneId: string, known?: KnownProcesses): Promise<boolean> {
   // pane.process_info wants `pane_id`; given `target` herdr answers for the
   // FOCUSED pane instead of erroring (live-verified 2026-09-21).
-  // on Windows herdr names only the pane's shell: processInfo adds the OmO below it (withOmoDescendants)
-  const info: { process_info?: { foreground_processes?: { pid?: unknown; argv?: unknown; cwd?: unknown }[] } } | null = known !== undefined ? { process_info: known ?? undefined } : await omoPaneProcessInfo(paneId);
+  // on Windows herdr names only the pane's shell, in a supplied list too: processInfo adds the OmO below it (withOmoDescendants)
+  const info: { process_info?: { foreground_processes?: { pid?: unknown; argv?: unknown; cwd?: unknown }[] } } | null = known !== undefined && process.platform !== "win32" ? { process_info: known ?? undefined } : await omoPaneProcessInfo(paneId);
   const home = userHome();
   return (info?.process_info?.foreground_processes ?? []).some((process) =>
     // a pid herdr does not report keeps the argv-only proof and fails the custom one closed

@@ -31,7 +31,29 @@ import * as served from "./runtime/capabilities.ts";
 import { HERDR_CORE } from "./runtime/capabilities.ts";
 import { claudeProjectDir } from "./claude-store.ts";
 import { launchedAgents } from "./launched-agents.ts";
-import { agyTranscriptPage, claudePanePid, claudePaneSession, ConversationReadPending, ConversationUnavailable, devinSessionForPane, forgetPaneTranscriptState, forgetTranscriptState, gjcTranscriptPath, HistoryChanged, isDevinProcess, isOmoProcess, ompSessionStore, paneConversation, paneProcessRoots, paneTranscript, parseClaudeTranscript, stoppedAgentJob, unwrapPastes, toolOutput, transcriptImage, transcriptImageAsync, transcriptPage, transcriptToolOutput, TRANSCRIPT_WINDOW_BYTES } from "./conversation.ts";
+import { agyTranscriptPage, claudePanePid, claudePaneSession, ConversationReadPending, ConversationUnavailable, devinSessionForPane, forgetPaneTranscriptState, forgetTranscriptState, gjcTranscriptPath, HistoryChanged, isDevinProcess, isOmoProcess, ompSessionStore, paneConversation, paneProcessRoots, paneRunsOmo, paneTranscript, parseClaudeTranscript, stoppedAgentJob, unwrapPastes, toolOutput, transcriptImage, transcriptImageAsync, transcriptPage, transcriptToolOutput, TRANSCRIPT_WINDOW_BYTES } from "./conversation.ts";
+
+it("sees an OmO below its own Windows pane shell, not below another pane's, with or without a supplied list", async () => {
+  const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+  // herdr on Windows names only the pane's shell
+  const shellOnly = { pane_id: "own-pane", shell_pid: 100, foreground_processes: [{ pid: 100, name: "powershell.exe", argv: ["powershell.exe"] }] };
+  const rpc = spyOn(herdr, "herdrRpc").mockResolvedValue({ process_info: shellOnly });
+  const shell = (pid: number) => ({ pid, parent: 1, path: "C:\\Windows\\powershell.exe", commandLine: "powershell.exe" });
+  const omo = (pid: number, parent: number) => ({ pid, parent, path: "C:\\node.exe", commandLine: "node.exe C:\\node_modules\\omo-ai\\bin\\omo.js" });
+  const table = spyOn(gjcRuntime, "recentProcessTable").mockResolvedValue([shell(100), omo(101, 100), shell(200), omo(201, 200)]);
+  Object.defineProperty(process, "platform", { value: "win32" });
+  try {
+    expect(await paneRunsOmo("own-pane")).toBe(true);
+    expect(await paneRunsOmo("own-pane", shellOnly)).toBe(true);
+    table.mockResolvedValue([shell(100), shell(200), omo(201, 200)]);
+    expect(await paneRunsOmo("own-pane")).toBe(false);
+    expect(await paneRunsOmo("own-pane", shellOnly)).toBe(false);
+  } finally {
+    Object.defineProperty(process, "platform", platform);
+    table.mockRestore();
+    rpc.mockRestore();
+  }
+});
 
 it("labels only Claude's explicit end_turn text as final-answer evidence", () => {
   const entry = (stop_reason: string | null) => JSON.stringify({ type: "assistant", message: { role: "assistant", stop_reason, content: [{ type: "text", text: "Answer" }] } });
