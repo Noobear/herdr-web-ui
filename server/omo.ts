@@ -364,7 +364,7 @@ export function withOmoDescendants(info: ProcessInfo, rows: readonly ProcessRow[
   return omo.length === 0 ? info : { ...info, process_info: { ...info?.process_info, foreground_processes: [...foreground, ...omo] } };
 }
 
-const processInfo = async (paneId: string): Promise<ProcessInfo> => {
+export const processInfo = async (paneId: string): Promise<ProcessInfo> => {
   const [info, rows] = await Promise.all([
     herdrRpc<NonNullable<ProcessInfo>>("pane.process_info", { pane_id: paneId }).catch(() => null),
     process.platform === "win32" ? recentProcessTable() : Promise.resolve([]),

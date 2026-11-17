@@ -55,7 +55,7 @@ import { coreSocket } from "./herdr-core/discovery.ts";
 import { coreSocketPath } from "./herdr-core/runtime.ts";
 import { capabilities } from "./runtime/capabilities.ts";
 import { forgetGjcPane, forgetGjcState, gjcPidUnderShell, gjcTranscriptFileForPane, isGjcProcess, storeRelative } from "./gjc-runtime.ts";
-import { isOmoProcess, omoProcessIdentity, omoSessionForPane, processEnviron } from "./omo.ts";
+import { isOmoProcess, omoProcessIdentity, omoSessionForPane, processEnviron, processInfo as omoPaneProcessInfo } from "./omo.ts";
 import { processAlive, processStartedAtAsync } from "./process-start.ts";
 import { ompBlobStore, ompHeldOpen, ompPaneRoute, ompRouteOwns, ompRouteStore, ompRouteTranscript } from "./omp.ts";
 import { forgetOpencodeRead, forgetOpencodeState, OPENCODE_IMAGE_REF, opencodeConversation, opencodeDatabasePath, opencodeFreshSession, opencodeImage, opencodeReadKey, opencodeSessionId, opencodeToolOutput } from "./opencode.ts";
@@ -1628,10 +1628,8 @@ type KnownProcesses = ProcessInfo | null | undefined;
 export async function paneRunsOmo(paneId: string, known?: KnownProcesses): Promise<boolean> {
   // pane.process_info wants `pane_id`; given `target` herdr answers for the
   // FOCUSED pane instead of erroring (live-verified 2026-09-21).
-  const info = known !== undefined ? { process_info: known ?? undefined } : await herdrRpc<{ process_info?: { foreground_processes?: { pid?: unknown; argv?: unknown; cwd?: unknown }[] } }>(
-    "pane.process_info",
-    { pane_id: paneId },
-  ).catch(() => null);
+  // on Windows herdr names only the pane's shell: processInfo adds the OmO below it (withOmoDescendants)
+  const info: { process_info?: { foreground_processes?: { pid?: unknown; argv?: unknown; cwd?: unknown }[] } } | null = known !== undefined ? { process_info: known ?? undefined } : await omoPaneProcessInfo(paneId);
   const home = userHome();
   return (info?.process_info?.foreground_processes ?? []).some((process) =>
     // a pid herdr does not report keeps the argv-only proof and fails the custom one closed
