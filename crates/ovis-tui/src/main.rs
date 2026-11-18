@@ -1,3 +1,4 @@
+//! The screen is hc-tui (https://github.com/followcat/hc-tui), run with the settings below.
 mod args;
 
 use std::ffi::{OsStr, OsString};
@@ -8,6 +9,7 @@ use hc_proto::endpoint::{self, Endpoint, Sys};
 use hc_tui::embed::Embed;
 
 fn main() -> ExitCode {
+    // SAFETY: the first thing the program does, while it is the only thread
     unsafe { forget_ovis_secrets() };
     let options = match args::parse(std::env::args().skip(1)) {
         Ok(args::Action::Help) => {
@@ -34,14 +36,21 @@ fn main() -> ExitCode {
     }
 }
 
+/// Whatever this program starts inherits its environment, and an Ovis token a caller exported must
+/// not reach it.
+///
+/// # Safety
+/// Call it before any thread exists: it changes the process's environment.
 unsafe fn forget_ovis_secrets() {
     for name in ["OVIS_TOKEN", "OVIS_URL", "HERDR_WEB_TOKEN"] {
+        // SAFETY: the caller guarantees no other thread reads or writes the environment yet
         unsafe { std::env::remove_var(name) };
     }
 }
 
 fn run(options: &args::Options) -> Result<(), String> {
     let mut env = endpoint::env_snapshot();
+    // hc-tui's own release check would send this program's users to "hc-tui --upgrade"
     env.insert(
         OsString::from("HC_TUI_NO_UPDATE_CHECK"),
         OsString::from("1"),
@@ -53,8 +62,11 @@ fn run(options: &args::Options) -> Result<(), String> {
         return Err(down);
     }
     let embed = Embed {
+        // nothing typed while a terminal's connection is down is sent once it is back
         discard_input_on_recovery: true,
         solo_on_narrow: true,
+        // Ovis never starts an engine on its own: a core started here would also inherit this
+        // program's environment
         no_core_start: true,
         hide_version_badge: true,
     };
@@ -80,6 +92,7 @@ fn core_down(endpoint: &Endpoint) -> Option<String> {
     Some(format!("herdr-core is not running. Start it with: {start}"))
 }
 
+/// `word` as it is pasted into a shell: single-quoted unless it is a plain word.
 fn shell_word(word: &str) -> String {
     let plain = !word.is_empty()
         && word

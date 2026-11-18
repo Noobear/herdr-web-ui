@@ -72,6 +72,8 @@ fn working_directory() -> io::Result<PathBuf> {
     }
 }
 
+/// This process's environment as pty-host.mjs and node-pty hand it on: no bridge token under either name,
+/// `TERM=xterm-256color`, `PWD` the working directory.
 fn environment(cwd: &OsStr) -> Vec<(OsString, OsString)> {
     let mut env: Vec<(OsString, OsString)> = std::env::vars_os()
         .filter(|(key, _)| key != "OVIS_TOKEN" && key != "HERDR_WEB_TOKEN" && key != "TERM" && key != "PWD")
@@ -111,6 +113,7 @@ pub fn spawn(command: &OsStr, args: &[OsString], cols: u16, rows: u16) -> io::Re
             let mut none: libc::sigset_t = std::mem::zeroed();
             libc::sigemptyset(&mut none);
             libc::pthread_sigmask(libc::SIG_SETMASK, &none, std::ptr::null_mut());
+            // a host killed outright (SIGKILL, the OOM killer) takes the command with it
             #[cfg(target_os = "linux")]
             {
                 check(libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL))?;
@@ -189,6 +192,7 @@ pub fn wake(fd: RawFd) {
 /// cannot be reused before `reap`. SIGCHLD must not be ignored (`default_sigchld`), or the kernel reaps it.
 pub fn wait_exited(pid: libc::pid_t) -> io::Result<()> {
     loop {
+        // SAFETY: an all-zero siginfo_t is valid, and waitid writes only into it
         let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
         if unsafe { libc::waitid(libc::P_PID, pid as libc::id_t, &mut info, libc::WEXITED | libc::WNOWAIT) } == 0 {
             return Ok(());
@@ -201,14 +205,17 @@ pub fn wait_exited(pid: libc::pid_t) -> io::Result<()> {
 }
 
 pub fn has_exited(pid: libc::pid_t) -> bool {
+    // SAFETY: an all-zero siginfo_t is valid, and waitid writes only into it
     let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
     let rc = unsafe { libc::waitid(libc::P_PID, pid as libc::id_t, &mut info, libc::WEXITED | libc::WNOHANG | libc::WNOWAIT) };
     // with WNOHANG a child still running leaves si_pid 0
+    // SAFETY: waitid filled `info` (or left it zeroed)
     rc == 0 && unsafe { info.si_pid() } != 0
 }
 
 /// SIGCHLD back to its default: an ignored one, which survives exec, would have the kernel reap the child.
 pub fn default_sigchld() -> io::Result<()> {
+    // SAFETY: an all-zero sigaction with SIG_DFL is valid
     unsafe {
         let mut action: libc::sigaction = std::mem::zeroed();
         action.sa_sigaction = libc::SIG_DFL;
@@ -232,6 +239,9 @@ pub fn reap(pid: libc::pid_t, nohang: bool) -> Option<libc::c_int> {
     Some(status)
 }
 
+/// A wait status as the host's exit code: the child's own code, or 128 + the signal's number when a
+/// signal ended it (as a shell reports it, and pty-host.mjs); 0 when that signal is in `sent`, one the
+/// host itself sent to stop it.
 pub fn exit_code(status: libc::c_int, sent: &[libc::c_int]) -> i32 {
     if libc::WIFEXITED(status) {
         libc::WEXITSTATUS(status)
@@ -246,6 +256,7 @@ pub fn signal(pid: libc::pid_t, signal: libc::c_int) {
     unsafe { libc::kill(pid, signal) };
 }
 
+/// Signals every process in the group `group`, the child's: it is a session leader, so its pid is the group's id.
 /// Never 0 or 1: kill(0) and kill(-1) would reach this host's own group (the server's) or every process.
 pub fn signal_group(group: libc::pid_t, signal: libc::c_int) {
     if group > 1 {
@@ -257,6 +268,7 @@ static GROUP: AtomicI32 = AtomicI32::new(0);
 
 extern "C" fn kill_group(signal: libc::c_int) {
     let group = GROUP.load(Ordering::Relaxed);
+    // SAFETY: kill and raise are async-signal-safe
     unsafe {
         if group > 1 {
             libc::kill(-group, libc::SIGKILL);
@@ -270,6 +282,7 @@ extern "C" fn kill_group(signal: libc::c_int) {
 pub fn kill_group_on_crash(group: libc::pid_t) -> io::Result<()> {
     GROUP.store(group, Ordering::Relaxed);
     for signal in [libc::SIGABRT, libc::SIGSEGV, libc::SIGBUS, libc::SIGILL, libc::SIGFPE] {
+        // SAFETY: an all-zero sigaction is valid; the handler only reads an atomic and calls kill and raise
         unsafe {
             let mut action: libc::sigaction = std::mem::zeroed();
             action.sa_sigaction = kill_group as extern "C" fn(libc::c_int) as libc::sighandler_t;
