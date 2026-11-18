@@ -341,6 +341,7 @@ function resumedIds(argv: string[]): string[] {
 
 const LAUNCH_SHELL = /(^|\/)(cmd|pwsh|powershell)$/i;
 const PACKAGE_RUNNER = /\/(npm|npx)-cli\.js$/i;
+const CONSOLE_HOST = /(^|\/)(conhost|openconsole)(\.exe)?(\s|$)/i;
 
 /** A shell or a JS package runner (`cmd /c omo.cmd`, `node …/npx-cli.js omo-ai`): it starts a program and is nothing itself. */
 function isLaunchStep(argv: readonly string[]): boolean {
@@ -366,13 +367,17 @@ export function withOmoDescendants(info: ProcessInfo, rows: readonly ProcessRow[
   const below = descendantProcesses(rows, shell);
   const byPid = new Map(below.map((entry) => [entry.pid, entry]));
   const parentOf = new Map(rows.map((row) => [row.pid, row.parent]));
+  // A process started in a console of its own (`Start-Process omo`) has its own console host as a
+  // child; one in the pane shares the pane's, which herdr hosts (live-verified, Windows 11).
+  const ownConsole = new Set(rows.filter((row) => CONSOLE_HOST.test(windowsPath(row.path ?? row.commandLine ?? ""))).map((row) => row.parent));
   // An OmO that another program started (a Claude running `omo` as a tool) is that program's, not
   // the pane's: between the shell and the OmO only a shell, a package runner, a process herdr names
-  // for this pane (a launcher such as pi.exe) or OmO itself may sit.
+  // for this pane (a launcher such as pi.exe) or OmO itself may sit, and none in another console.
   const reached = (pid: number): boolean => {
+    if (ownConsole.has(pid)) return false;
     for (let at = parentOf.get(pid), steps = 0; at !== shell; at = parentOf.get(at!), steps++) {
       const step = at === undefined ? undefined : byPid.get(at);
-      if (step === undefined || steps > below.length) return false;
+      if (step === undefined || steps > below.length || ownConsole.has(step.pid)) return false;
       if (!named.has(step.pid) && !isOmoProcess(step.argv) && !isLaunchStep(step.argv)) return false;
     }
     return true;

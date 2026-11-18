@@ -51,6 +51,9 @@ it("sees an OmO below its own Windows pane shell, not below another pane's, with
     // an OmO a Claude in this pane runs as its tool is not the pane's agent
     table.mockResolvedValue([shell(100), { pid: 101, parent: 100, path: "C:\\claude.exe", commandLine: "claude.exe" }, omo(102, 101)]);
     expect(await paneRunsOmo("own-pane")).toBe(false);
+    // herdr is asked about this pane by its id: given `target`, it answers for the focused pane
+    expect(rpc.mock.calls.map(([method, params]) => [method, params])).toContainEqual(["pane.process_info", { pane_id: "own-pane" }]);
+    expect(rpc.mock.calls.every(([, params]) => (params as { pane_id?: string }).pane_id === "own-pane")).toBe(true);
   } finally {
     Object.defineProperty(process, "platform", platform);
     table.mockRestore();

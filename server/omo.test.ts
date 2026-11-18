@@ -268,6 +268,12 @@ it("takes an OmO a shell or package runner started, not one another agent starte
   expect(added([shell, { pid: 30, parent: 10, path: "C:\\node.exe", commandLine: 'node.exe "C:\\npm\\node_modules\\npm\\bin\\npx-cli.js" omo-ai' }, omo(31, 30)])).toEqual([31]);
   expect(added([shell, { pid: 40, parent: 10, path: "C:\\claude.exe", commandLine: "claude.exe" }, { pid: 41, parent: 40, path: "C:\\Windows\\System32\\cmd.exe", commandLine: "cmd.exe /c omo --print hi" }, omo(42, 41)])).toEqual([]);
   expect(added([shell, { pid: 50, parent: 10, path: "C:\\node.exe", commandLine: 'node.exe "C:\\npm\\node_modules\\@anthropic-ai\\claude-code\\cli.js"' }, omo(51, 50)])).toEqual([]);
+  // `Start-Process omo` from the pane's shell: the OmO runs in a console window of its own
+  const host = (pid: number, parent: number): ProcessRow => ({ pid, parent, path: "C:\\WINDOWS\\system32\\conhost.exe", commandLine: "\\??\\C:\\WINDOWS\\system32\\conhost.exe 0xffffffff -ForceV1" });
+  expect(added([shell, omo(60, 10), host(61, 60)])).toEqual([]);
+  expect(added([shell, { pid: 70, parent: 10, path: "C:\\Windows\\System32\\cmd.exe", commandLine: "cmd.exe /c start omo" }, host(71, 70), omo(72, 70)])).toEqual([]);
+  expect(added([shell, omo(80, 10), { pid: 81, parent: 80, path: null, commandLine: "\\??\\C:\\WINDOWS\\system32\\conhost.exe 0x4" }])).toEqual([]);
+  expect(added([shell, omo(90, 10)])).toEqual([90]);
 });
 
 it("does not list an OmO process twice when herdr already names it", () => {
