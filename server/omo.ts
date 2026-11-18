@@ -339,6 +339,18 @@ function resumedIds(argv: string[]): string[] {
   return result;
 }
 
+const LAUNCH_SHELL = /(^|\/)(cmd|pwsh|powershell)$/i;
+const PACKAGE_RUNNER = /\/(npm|npx)-cli\.js$/i;
+
+/** A shell or a JS package runner (`cmd /c omo.cmd`, `node …/npx-cli.js omo-ai`): it starts a program and is nothing itself. */
+function isLaunchStep(argv: readonly string[]): boolean {
+  const words = argv.map(windowsPath);
+  if (LAUNCH_SHELL.test(words[0] ?? "")) return true;
+  if (!JS_RUNTIME.test(words[0] ?? "")) return false;
+  const script = words.slice(1).find((word) => !word.startsWith("-"));
+  return script !== undefined && PACKAGE_RUNNER.test(script);
+}
+
 export type ProcessInfo = { process_info?: { shell_pid?: number; foreground_processes?: { pid: number; argv?: string[]; cwd?: string }[] } } | null;
 
 /**
@@ -350,8 +362,23 @@ export function withOmoDescendants(info: ProcessInfo, rows: readonly ProcessRow[
   const shell = info?.process_info?.shell_pid;
   if (shell === undefined) return info;
   const foreground = info?.process_info?.foreground_processes ?? [];
-  const omo = descendantProcesses(rows, shell).filter((entry) =>
-    isOmoProcess(entry.argv) && !foreground.some((existing) => existing.pid === entry.pid));
+  const named = new Set(foreground.map((entry) => entry.pid));
+  const below = descendantProcesses(rows, shell);
+  const byPid = new Map(below.map((entry) => [entry.pid, entry]));
+  const parentOf = new Map(rows.map((row) => [row.pid, row.parent]));
+  // An OmO that another program started (a Claude running `omo` as a tool) is that program's, not
+  // the pane's: between the shell and the OmO only a shell, a package runner, a process herdr names
+  // for this pane (a launcher such as pi.exe) or OmO itself may sit.
+  const reached = (pid: number): boolean => {
+    for (let at = parentOf.get(pid), steps = 0; at !== shell; at = parentOf.get(at!), steps++) {
+      const step = at === undefined ? undefined : byPid.get(at);
+      if (step === undefined || steps > below.length) return false;
+      if (!named.has(step.pid) && !isOmoProcess(step.argv) && !isLaunchStep(step.argv)) return false;
+    }
+    return true;
+  };
+  const omo = below.filter((entry) =>
+    isOmoProcess(entry.argv) && !named.has(entry.pid) && reached(entry.pid));
   return omo.length === 0 ? info : { ...info, process_info: { ...info?.process_info, foreground_processes: [...foreground, ...omo] } };
 }
 

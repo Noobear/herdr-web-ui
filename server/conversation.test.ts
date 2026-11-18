@@ -48,6 +48,9 @@ it("sees an OmO below its own Windows pane shell, not below another pane's, with
     table.mockResolvedValue([shell(100), shell(200), omo(201, 200)]);
     expect(await paneRunsOmo("own-pane")).toBe(false);
     expect(await paneRunsOmo("own-pane", shellOnly)).toBe(false);
+    // an OmO a Claude in this pane runs as its tool is not the pane's agent
+    table.mockResolvedValue([shell(100), { pid: 101, parent: 100, path: "C:\\claude.exe", commandLine: "claude.exe" }, omo(102, 101)]);
+    expect(await paneRunsOmo("own-pane")).toBe(false);
   } finally {
     Object.defineProperty(process, "platform", platform);
     table.mockRestore();

@@ -258,6 +258,18 @@ it("does not turn an ordinary pi into OmO or borrow another pane's OmO", () => {
   expect(withOmoDescendants(null, launcherRows)).toBeNull();
 });
 
+it("takes an OmO a shell or package runner started, not one another agent started as its tool", () => {
+  const shellOnly: ProcessInfo = { process_info: { shell_pid: 10, foreground_processes: [{ pid: 10, argv: ["C:\\pwsh.exe"] }] } };
+  const shell = { pid: 10, parent: 1, path: "C:\\pwsh.exe", commandLine: "pwsh.exe" };
+  const omo = (pid: number, parent: number): ProcessRow => ({ pid, parent, path: "C:\\node.exe", commandLine: 'node.exe "C:\\npm\\node_modules\\omo-ai\\bin\\omo.js"' });
+  const added = (rows: ProcessRow[]): number[] =>
+    (withOmoDescendants(shellOnly, rows)?.process_info?.foreground_processes ?? []).map((entry) => entry.pid).filter((pid) => pid !== 10);
+  expect(added([shell, { pid: 20, parent: 10, path: "C:\\Windows\\System32\\cmd.exe", commandLine: 'cmd.exe /d /s /c "omo.cmd"' }, omo(21, 20)])).toEqual([21]);
+  expect(added([shell, { pid: 30, parent: 10, path: "C:\\node.exe", commandLine: 'node.exe "C:\\npm\\node_modules\\npm\\bin\\npx-cli.js" omo-ai' }, omo(31, 30)])).toEqual([31]);
+  expect(added([shell, { pid: 40, parent: 10, path: "C:\\claude.exe", commandLine: "claude.exe" }, { pid: 41, parent: 40, path: "C:\\Windows\\System32\\cmd.exe", commandLine: "cmd.exe /c omo --print hi" }, omo(42, 41)])).toEqual([]);
+  expect(added([shell, { pid: 50, parent: 10, path: "C:\\node.exe", commandLine: 'node.exe "C:\\npm\\node_modules\\@anthropic-ai\\claude-code\\cli.js"' }, omo(51, 50)])).toEqual([]);
+});
+
 it("does not list an OmO process twice when herdr already names it", () => {
   const once = withOmoDescendants(launcherInfo, launcherRows);
   expect(withOmoDescendants(once, launcherRows)).toEqual(once);
