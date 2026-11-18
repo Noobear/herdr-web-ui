@@ -43,6 +43,11 @@ it("sees an OmO below its own Windows pane shell, not below another pane's, with
   const omo = (pid: number, parent: number) => ({ pid, parent, path: "C:\\node.exe", commandLine: "node.exe C:\\node_modules\\omo-ai\\bin\\omo.js" });
   const table = spyOn(gjcRuntime, "recentProcessTable").mockResolvedValue([shell(100), omo(101, 100), shell(200), omo(201, 200)]);
   const alive = spyOn(processStart, "processAlive").mockReturnValue(true);
+  const born = spyOn(processStart, "processStartedAt").mockReturnValue(null);
+  const home = mkdtempSync(join(tmpdir(), "herdr-omo-win-home-"));
+  const env = { HOME: process.env["HOME"], USERPROFILE: process.env["USERPROFILE"] };
+  process.env["HOME"] = home;
+  process.env["USERPROFILE"] = home;
   Object.defineProperty(process, "platform", { value: "win32" });
   try {
     expect(await paneRunsOmo("own-pane")).toBe(true);
@@ -69,8 +74,11 @@ it("sees an OmO below its own Windows pane shell, not below another pane's, with
     expect(rpc).not.toHaveBeenCalled();
   } finally {
     Object.defineProperty(process, "platform", platform);
+    for (const [key, value] of Object.entries(env)) if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    rmSync(home, { recursive: true, force: true });
     table.mockRestore();
     alive.mockRestore();
+    born.mockRestore();
     rpc.mockRestore();
   }
 });
