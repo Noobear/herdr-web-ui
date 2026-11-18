@@ -62,6 +62,11 @@ it("sees an OmO below its own Windows pane shell, not below another pane's, with
     // herdr is asked about this pane by its id: given `target`, it answers for the focused pane
     expect(rpc.mock.calls.map(([method, params]) => [method, params])).toContainEqual(["pane.process_info", { pane_id: "own-pane" }]);
     expect(rpc.mock.calls.every(([, params]) => (params as { pane_id?: string }).pane_id === "own-pane")).toBe(true);
+    // a supplied sample is used as it is, herdr not asked again
+    alive.mockReturnValue(true);
+    rpc.mockClear();
+    expect(await paneRunsOmo("own-pane", shellOnly)).toBe(true);
+    expect(rpc).not.toHaveBeenCalled();
   } finally {
     Object.defineProperty(process, "platform", platform);
     table.mockRestore();

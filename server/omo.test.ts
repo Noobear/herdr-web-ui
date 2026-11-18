@@ -274,6 +274,12 @@ it("takes an OmO a shell or package runner started, not one another agent starte
   expect(added([shell, { pid: 70, parent: 10, path: "C:\\Windows\\System32\\cmd.exe", commandLine: "cmd.exe /c start omo" }, host(71, 70), omo(72, 70)])).toEqual([]);
   expect(added([shell, omo(80, 10), { pid: 81, parent: 80, path: null, commandLine: "\\??\\C:\\WINDOWS\\system32\\conhost.exe 0x4" }])).toEqual([]);
   expect(added([shell, omo(90, 10)])).toEqual([90]);
+  // a host left by an earlier process that held the OmO's number is not the OmO's own console
+  expect(added([shell, { ...omo(95, 10), started: 2000 }, { ...host(96, 95), started: 1000 }])).toEqual([95]);
+  // herdr naming another agent as the pane's program does not make the OmO it runs as a tool the pane's
+  const claudeNamed: ProcessInfo = { process_info: { shell_pid: 10, foreground_processes: [{ pid: 40, argv: ["C:\\claude.exe"] }] } };
+  const rows = [shell, { pid: 40, parent: 10, path: "C:\\claude.exe", commandLine: "claude.exe" }, { pid: 41, parent: 40, path: "C:\\Windows\\System32\\cmd.exe", commandLine: "cmd.exe /c omo" }, omo(42, 41)];
+  expect(withOmoDescendants(claudeNamed, rows)).toEqual(claudeNamed);
 });
 
 it("does not list an OmO process twice when herdr already names it", () => {
