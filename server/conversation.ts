@@ -1349,7 +1349,7 @@ export async function paneRunsOmo(paneId: string, known?: KnownProcesses): Promi
   // on Windows herdr names only the pane's shell, in a supplied list too: the OmO below it is added (withOmoDescendants)
   const supplied = known === undefined ? undefined : { process_info: known ?? undefined } as OmoProcessInfo;
   const info: { process_info?: { foreground_processes?: { pid?: unknown; argv?: unknown; cwd?: unknown }[] } } | null = supplied === undefined ? await omoPaneProcessInfo(paneId)
-    : process.platform === "win32" && typeof known?.shell_pid === "number" ? withOmoDescendants(supplied, await recentProcessTable()) : supplied;
+    : process.platform === "win32" && typeof known?.shell_pid === "number" ? withOmoDescendants(supplied, await recentProcessTable(), processAlive) : supplied;
   const home = userHome();
   return (info?.process_info?.foreground_processes ?? []).some((process) =>
     omoProcessIdentity({

@@ -26,6 +26,7 @@ import { DevinHistoryChanged } from "./devin.ts";
 import * as devinSession from "./devin-session.ts";
 import * as omo from "./omo.ts";
 import * as gjcRuntime from "./gjc-runtime.ts";
+import * as processStart from "./process-start.ts";
 import * as runtime from "./herdr-core/runtime.ts";
 import * as served from "./runtime/capabilities.ts";
 import { HERDR_CORE } from "./runtime/capabilities.ts";
@@ -41,6 +42,7 @@ it("sees an OmO below its own Windows pane shell, not below another pane's, with
   const shell = (pid: number) => ({ pid, parent: 1, path: "C:\\Windows\\powershell.exe", commandLine: "powershell.exe" });
   const omo = (pid: number, parent: number) => ({ pid, parent, path: "C:\\node.exe", commandLine: "node.exe C:\\node_modules\\omo-ai\\bin\\omo.js" });
   const table = spyOn(gjcRuntime, "recentProcessTable").mockResolvedValue([shell(100), omo(101, 100), shell(200), omo(201, 200)]);
+  const alive = spyOn(processStart, "processAlive").mockReturnValue(true);
   Object.defineProperty(process, "platform", { value: "win32" });
   try {
     expect(await paneRunsOmo("own-pane")).toBe(true);
@@ -51,12 +53,19 @@ it("sees an OmO below its own Windows pane shell, not below another pane's, with
     // an OmO a Claude in this pane runs as its tool is not the pane's agent
     table.mockResolvedValue([shell(100), { pid: 101, parent: 100, path: "C:\\claude.exe", commandLine: "claude.exe" }, omo(102, 101)]);
     expect(await paneRunsOmo("own-pane")).toBe(false);
+    // the process table is a few seconds old: an OmO that exited since is no longer the pane's
+    table.mockResolvedValue([shell(100), omo(101, 100)]);
+    expect(await paneRunsOmo("own-pane")).toBe(true);
+    alive.mockImplementation((pid: number) => pid !== 101);
+    expect(await paneRunsOmo("own-pane")).toBe(false);
+    expect(await paneRunsOmo("own-pane", shellOnly)).toBe(false);
     // herdr is asked about this pane by its id: given `target`, it answers for the focused pane
     expect(rpc.mock.calls.map(([method, params]) => [method, params])).toContainEqual(["pane.process_info", { pane_id: "own-pane" }]);
     expect(rpc.mock.calls.every(([, params]) => (params as { pane_id?: string }).pane_id === "own-pane")).toBe(true);
   } finally {
     Object.defineProperty(process, "platform", platform);
     table.mockRestore();
+    alive.mockRestore();
     rpc.mockRestore();
   }
 });

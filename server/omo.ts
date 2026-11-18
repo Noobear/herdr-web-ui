@@ -4,7 +4,7 @@ import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { HerdrPane } from "../shared/protocol.ts";
 import { herdrRpc } from "./herdr/client.ts";
 import { recentProcessTable } from "./gjc-runtime.ts";
-import { processStartedAt, processStartedAtAsync } from "./process-start.ts";
+import { processAlive, processStartedAt, processStartedAtAsync } from "./process-start.ts";
 import { descendantProcesses, type ProcessRow } from "./windows-processes.ts";
 import { userHome } from "./user-home.ts";
 
@@ -359,7 +359,7 @@ export type ProcessInfo = { process_info?: { shell_pid?: number; foreground_proc
  * starts (windows-processes.ts). Only processes below this pane's own shell
  * count, and one herdr already named is not added twice.
  */
-export function withOmoDescendants(info: ProcessInfo, rows: readonly ProcessRow[]): ProcessInfo {
+export function withOmoDescendants(info: ProcessInfo, rows: readonly ProcessRow[], alive: (pid: number) => boolean = () => true): ProcessInfo {
   const shell = info?.process_info?.shell_pid;
   if (shell === undefined) return info;
   const foreground = info?.process_info?.foreground_processes ?? [];
@@ -382,8 +382,9 @@ export function withOmoDescendants(info: ProcessInfo, rows: readonly ProcessRow[
     }
     return true;
   };
+  // the table is a few seconds old (recentProcessTable): an OmO that exited since is not added
   const omo = below.filter((entry) =>
-    isOmoProcess(entry.argv) && !named.has(entry.pid) && reached(entry.pid));
+    isOmoProcess(entry.argv) && !named.has(entry.pid) && reached(entry.pid) && alive(entry.pid));
   return omo.length === 0 ? info : { ...info, process_info: { ...info?.process_info, foreground_processes: [...foreground, ...omo] } };
 }
 
@@ -392,7 +393,7 @@ export const processInfo = async (paneId: string): Promise<ProcessInfo> => {
     herdrRpc<NonNullable<ProcessInfo>>("pane.process_info", { pane_id: paneId }).catch(() => null),
     process.platform === "win32" ? recentProcessTable() : Promise.resolve([]),
   ]);
-  return withOmoDescendants(info, rows);
+  return withOmoDescendants(info, rows, processAlive);
 };
 
 /**
